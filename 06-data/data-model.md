@@ -1,636 +1,638 @@
-# Modelo de datos — Simple Stock Flow
+# Data Model — Simple Stock Flow
 
-**El único sitio donde vive el modelo de datos.** Quien implemente no necesita abrir el código ni
-conectarse al motor para saber qué hay, de qué tipo, con qué regla y **dónde vive esa regla hoy**.
+**The single place where the data model lives.** Whoever implements this does not need to open the
+code or connect to the engine to know what's there, of what type, under what rule, and **where
+that rule actually lives today**.
 
-- **Fecha:** 2026-09-19
-- **Verificado contra:** PostgreSQL 16.14 (`simple-stock-flow-db-1`), base `simple_stock_flow`, esquema
-  `sales`, servidor en UTC. Las consultas y su salida literal están en [§10](#10-cómo-se-comprueba-que-este-documento-no-miente).
-- **Rige bajo:** [`constitution.md`](constitution.md) (innegociable) y [`spec.md`](spec.md) (qué y
-  por qué). Las decisiones técnicas D-01…D-10 están en [`plan.md`](plan.md) §1; la forma del
-  sistema, en [`architecture.md`](architecture.md); las cuatro decisiones estructurales, en
+- **Date:** 2026-09-19
+- **Verified against:** PostgreSQL 16.14 (`simple-stock-flow-db-1`), database `simple_stock_flow`,
+  schema `sales`, server in UTC. The queries and their literal output are in [§10](#10-how-this-document-is-checked-for-lying).
+- **Governed by:** [`constitution.md`](constitution.md) (non-negotiable) and [`spec.md`](spec.md)
+  (what and why). Technical decisions D-01…D-10 are in [`plan.md`](plan.md) §1; the shape of the
+  system, in [`architecture.md`](architecture.md); the four structural decisions, in
   [`adr/`](adr/).
-- **`plan.md` ya no describe el esquema.** Sus §2 y §3 enlazan aquí. Si algo de allí contradice a
-  este documento, gana este documento; si este documento contradice al motor, **gana el motor**
-  (artículo X) y el documento está roto.
+- **`plan.md` no longer describes the schema.** Its §2 and §3 link here. If anything there
+  contradicts this document, this document wins; if this document contradicts the engine, **the
+  engine wins** (article X) and the document is broken.
 
 ---
 
-## Cómo se lee este documento
+## How to read this document
 
-Toda regla del modelo lleva una marca, y **solo hay tres**:
+Every model rule carries a mark, and **there are only three**:
 
-| Marca | Significa |
+| Mark | Means |
 |---|---|
-| **motor** | Existe en Postgres ahora mismo. Un `INSERT` manual la respeta o falla |
-| **solo dominio** | La garantiza C# y nada más. **Un `INSERT` por `psql` la salta sin ruido** |
-| **pendiente (T-xx)** | No existe todavía. La pone esa tarea de [`tasks.md`](tasks.md) |
+| **engine** | Exists in Postgres right now. A manual `INSERT` respects it or fails |
+| **domain only** | Guaranteed by C# and nothing else. **An `INSERT` via `psql` skips it silently** |
+| **pending (T-xx)** | Doesn't exist yet. That task in [`tasks.md`](tasks.md) will add it |
 
-**Por qué la tercera columna es el corazón del documento.** Una invariante que solo vive en C#
-protege a la aplicación, no a los datos: cualquier `psql`, cualquier migración y cualquier servicio
-futuro la saltan sin enterarse. [ADR-002](adr/adr-002-concurrencia-optimista.md) ya fijó el criterio
-para `stock >= 0` —*si la restricción salta, algo escribió fuera del adaptador*— y ese criterio vale
-para **todas** las invariantes expresables en el motor. Lo que no está aplicado se declara
-pendiente; no se promete.
+**Why the third column is the heart of the document.** An invariant that only lives in C#
+protects the application, not the data: any `psql`, any migration, and any future service skips
+it without noticing. [ADR-002](adr/adr-002-optimistic-concurrency.md) already set the criterion
+for `stock >= 0` —*if the constraint trips, something wrote outside the adapter*— and that
+criterion holds for **all** invariants expressible in the engine. What isn't enforced is declared
+pending; it isn't promised.
 
 ---
 
-## 0. Convención de nombres del esquema
+## 0. Schema naming convention
 
-**Las cinco tablas van en singular.** Lo manda la tabla de convenciones de la gobernanza, y el
-proyecto se alinea con ella:
+**The five tables are singular.** That's what the governance's convention table mandates, and the
+project aligns with it:
 
-| Elemento | Convención | Ejemplo |
+| Element | Convention | Example |
 |---|---|---|
-| Entidad | `PascalCase`, inglés, **singular**, ASCII | `SaleItem` |
-| Atributo | `snake_case`, inglés, **singular**, ASCII | `unit_price` |
-| Atributo de lista | **Nunca plural** | `sale_item`, no `sale_items` |
+| Entity | `PascalCase`, English, **singular**, ASCII | `SaleItem` |
+| Attribute | `snake_case`, English, **singular**, ASCII | `unit_price` |
+| List attribute | **Never plural** | `sale_item`, not `sale_items` |
 
-La traducción a esquema es directa: `category`, `product`, `sale`, `sale_item`, `user`. **Lo que
-pasa a singular es la tabla; el esquema sigue llamándose `sales`**, así que la forma cualificada del
-agregado de ventas es `sales.sale`.
+Translating to schema is direct: `category`, `product`, `sale`, `sale_item`, `user`. **What goes
+singular is the table; the schema keeps being called `sales`**, so the qualified form of the sales
+aggregate is `sales.sale`.
 
-**El singular no alcanza al código de objetos, y no es una excepción sino la frontera.** Los nombres
-de las clases de dominio (`Product`, `Sale`, `SaleItem`, `User`, `Category`) ya eran singulares y
-correctos; las colecciones de C# (`Sale.Items`, `DbSet<Product> Products`) **siguen en plural**
-porque nombran conjuntos de objetos, no tablas. Traducir de uno a otro es responsabilidad del
-adaptador de persistencia, que es exactamente donde vive el mapeo.
+**The singular doesn't reach object code, and that's not an exception but the boundary.** Domain
+class names (`Product`, `Sale`, `SaleItem`, `User`, `Category`) were already singular and correct;
+C# collections (`Sale.Items`, `DbSet<Product> Products`) **stay plural** because they name sets of
+objects, not tables. Translating from one to the other is the persistence adapter's job, which is
+exactly where the mapping belongs.
 
-**`user` no obliga a entrecomillar, y está verificado.** Postgres trata `user` como palabra clave
-**solo sin cualificar**; en cuanto el nombre lleva esquema delante, lo lee como identificador:
+**`user` doesn't require quoting, and it's verified.** Postgres treats `user` as a keyword **only
+when unqualified**; as soon as the name has a schema in front of it, it reads it as an identifier:
 
 ```sql
 create table sales."user"(id int);
-select * from sales.user;   -- funciona, SIN comillas
+select * from sales.user;   -- works, WITHOUT quotes
 ```
 
-Todas las consultas de este proyecto van precedidas de `sales.`, así que el problema no se plantea
-—y EF entrecomilla por su cuenta de todos modos—. **El motivo es que el esquema cualifica, no que
-el nombre sea plural**: cualquier documento que dé la otra razón está equivocado, aunque acierte en
-la conclusión.
+Every query in this project is prefixed with `sales.`, so the problem never arises —and EF quotes
+on its own anyway—. **The reason is that the schema qualifies it, not that the name is plural**:
+any document giving the other reason is wrong, even if it reaches the right conclusion.
 
-**Escribir y ver no son lo mismo, y conviene no confundirlos.** Postgres **no exige** las comillas
-al escribir, pero **sí las imprime** al renderizar el identificador por su cuenta: en §10.2 y §10.3
-la tabla sale como `sales."user"`, no como `sales.user`. Es cosmética del catálogo, no una
-obligación de sintaxis, y no hay ninguna consulta de este proyecto que tenga que entrecomillarla.
+**Writing and viewing aren't the same thing, and it's worth not confusing them.** Postgres does
+**not require** quotes when writing, but it **does print** them when rendering the identifier on
+its own: in §10.2 and §10.3 the table shows up as `sales."user"`, not `sales.user`. That's catalog
+cosmetics, not a syntax requirement, and no query in this project ever needs to quote it.
 
-> El otro eje de la convención —qué nombres genera EF y cuáles se escriben a mano— está en
-> [§3.1](#31-convención-de-nombres--hoy-conviven-dos-estilos).
+> The other axis of the convention —which names EF generates and which are written by hand— is in
+> [§3.1](#31-naming-convention--today-two-styles-coexist).
 
 ---
 
-## 1. Glosario del dominio
+## 1. Domain glossary
 
-En lenguaje de negocio. El código y los nombres de columna van en inglés (artículo XI); la columna
-técnica indica dónde vive cada término.
+In business language. Code and column names are in English (article XI); the technical column
+shows where each term lives.
 
-| Término (negocio) | Definición funcional | Dónde vive (técnico) |
+| Term (business) | Functional definition | Where it lives (technical) |
 |---|---|---|
-| **Producto** | Artículo del catálogo. Tiene **nombre, precio, stock, categoría e imagen opcional, y nada más** (DP-03) | `Product` · tabla `product` |
-| **Categoría** | Clasificación a la que pertenece un producto. Conjunto **fijo de cinco**, sembrado, sin mantenimiento (D-10) | `Category` · tabla `category` |
-| **Precio** | Valor monetario vigente del producto en el catálogo. Estrictamente positivo | `Money` (objeto de valor) · columna `product.price` |
-| **Stock** | Unidades disponibles del producto. Nunca negativo | `product.stock` |
-| **Imagen del producto** | **Clave opaca** del binario en el almacenamiento externo. Ni el binario ni una ruta (D-08). Ausente se representa con `NULL`, nunca con cadena vacía | `product.image_key` |
-| **Venta** | Hecho comercial consumado e **inmutable**: quién, cuándo y qué. Una vez registrada no se edita ni se borra | `Sale` · tabla `sale` |
-| **Línea de venta** | Renglón de la venta: producto, cantidad y **precio congelado** del momento. No existe fuera de su venta | `SaleItem` · tabla `sale_item` |
-| **Cantidad** | Unidades vendidas en una línea. Estrictamente positiva | `Quantity` (objeto de valor) · `sale_item.quantity` |
-| **Total de la venta** | Suma de subtotales. **Se calcula, no se almacena** (artículo VII) | `Sale.Total` · **sin columna** |
-| **Subtotal de la línea** | Precio unitario por cantidad. **Se calcula, no se almacena** | `SaleItem.Subtotal` · **sin columna** |
-| **Usuario** | Operador interno que se autentica y registra ventas. **No hay entidad cliente ni comprador** | `User` · tabla `user` |
-| **Rol** | Atribución del usuario en un conjunto cerrado de dos: `admin` o `seller` | `user.role` |
-| **Hash de clave** | Huella irreversible de la contraseña. El dominio **nunca ve la clave en claro** (D-09) | `user.password_hash` |
-| **Rango de fechas** | Ventana temporal del reporte. El fin no puede ser anterior al inicio | Objeto de valor de la capa de aplicación · **sin tabla** |
-| **Reporte de ventas** | Agregación por producto sobre un rango. **No se persiste**: se calcula en el motor por un puerto de lectura (D-06) | Modelo de lectura · **sin tabla** |
+| **Product** | Catalog item. Has **name, price, stock, category and optional image, and nothing else** (DP-03) | `Product` · table `product` |
+| **Category** | Classification a product belongs to. **Fixed set of five**, seeded, no maintenance (D-10) | `Category` · table `category` |
+| **Price** | Current monetary value of the product in the catalog. Strictly positive | `Money` (value object) · column `product.price` |
+| **Stock** | Units of the product available. Never negative | `product.stock` |
+| **Product image** | **Opaque key** of the binary in external storage. Neither the binary nor a path (D-08). Absence is represented as `NULL`, never as an empty string | `product.image_key` |
+| **Sale** | Consummated, **immutable** commercial fact: who, when, and what. Once recorded it is neither edited nor deleted | `Sale` · table `sale` |
+| **Sale line** | Row of the sale: product, quantity and the **frozen price** at the time. Doesn't exist outside its sale | `SaleItem` · table `sale_item` |
+| **Quantity** | Units sold in a line. Strictly positive | `Quantity` (value object) · `sale_item.quantity` |
+| **Sale total** | Sum of subtotals. **Computed, not stored** (article VII) | `Sale.Total` · **no column** |
+| **Line subtotal** | Unit price times quantity. **Computed, not stored** | `SaleItem.Subtotal` · **no column** |
+| **User** | Internal operator who authenticates and records sales. **There is no customer or buyer entity** | `User` · table `user` |
+| **Role** | User's attribution within a closed set of two: `admin` or `seller` | `user.role` |
+| **Password hash** | Irreversible fingerprint of the password. The domain **never sees the plaintext password** (D-09) | `user.password_hash` |
+| **Date range** | Report's time window. The end cannot precede the start | Value object of the application layer · **no table** |
+| **Sales report** | Aggregation by product over a range. **Not persisted**: computed in the engine by a read port (D-06) | Read model · **no table** |
 
-**Nombre congelado.** Cuando este documento dice que un valor está *congelado*, significa que la
-línea de venta guarda una **copia del valor en el instante de la venta** y esa copia no sigue al
-catálogo. No es desnormalización: el precio de venta y el nombre vendido son **hechos propios de la
-venta**, no atributos del producto leídos tarde. Es lo que permite renombrar o reprecificar un
-producto sin reescribir reportes de períodos cerrados.
+**Frozen value.** When this document says a value is *frozen*, it means the sale line stores a
+**copy of the value at the moment of the sale** and that copy does not follow the catalog. This is
+not denormalization: the selling price and the sold name are **facts of the sale itself**, not
+product attributes read late. It's what lets a product be renamed or repriced without rewriting
+reports for closed periods.
 
-**Adaptado del recuperado, con dos correcciones.** El glosario del documento recuperado
-`data/data-model.md` §2 incluía *moneda de la venta* como término; **el sistema es monomoneda por
-construcción** (D-05) y no hay columna de moneda en ninguna tabla. Y su definición de Producto
-dejaba la puerta abierta a atributos adicionales; **DP-03 la cierra**: nombre, precio, stock,
-categoría e imagen. Sin descripción, sin SKU, sin código de referencia.
+**Adapted from the recovered document, with two corrections.** The recovered document's glossary
+at `data/data-model.md` §2 included *sale currency* as a term; **the system is single-currency by
+construction** (D-05) and there is no currency column in any table. And its definition of Product
+left the door open to additional attributes; **DP-03 closes it**: name, price, stock, category and
+image. No description, no SKU, no reference code.
 
 ---
 
-## 2. Las cinco entidades y sus invariantes
+## 2. The five entities and their invariants
 
-**Cinco entidades, cinco tablas, sin excedente.** No hay tabla de reporte, ni de auditoría, ni de
-contadores, ni tablas para los objetos de valor —que no tienen identidad y viven dentro de la fila
-de su dueño (D-07)—.
+**Five entities, five tables, no surplus.** There's no report table, no audit table, no counters
+table, and no tables for value objects —which have no identity and live inside their owner's row
+(D-07)—.
 
 ```mermaid
 erDiagram
-    category  ||--o{ product   : "clasifica"
-    sale      ||--|{ sale_item : "compone"
-    product   ||--o{ sale_item : "vendido en (FK RESTRICT)"
-    user      ||--o{ sale      : "registra (FK pendiente T-12)"
+    category  ||--o{ product   : "classifies"
+    sale      ||--|{ sale_item : "composes"
+    product   ||--o{ sale_item : "sold in (FK RESTRICT)"
+    user      ||--o{ sale      : "records (FK pending T-12)"
 ```
 
-### 2.1 `Category` — entidad de referencia
+### 2.1 `Category` — reference entity
 
-| Invariante | Quién la hace cumplir | Marca |
+| Invariant | Who enforces it | Mark |
 |---|---|---|
-| Nombre obligatorio y no vacío; se guarda recortado | `Category.Rename` | **solo dominio** · baja al motor en T-20 |
-| Nombre único | Índice único `IX_category_name` | **motor** |
+| Name required and non-empty; stored trimmed | `Category.Rename` | **domain only** · lowered to the engine in T-20 |
+| Name unique | Unique index `IX_category_name` | **engine** |
 
-**No es raíz de agregado y no tiene ciclo de vida.** Su repositorio es de **solo lectura**: ningún
-puerto crea, renombra ni borra categorías. Las cinco filas nacen en la migración inicial ([§9](#9-estrategia-de-semilla)).
+**Not an aggregate root and has no lifecycle.** Its repository is **read-only**: no port creates,
+renames or deletes categories. The five rows are born in the initial migration ([§9](#9-seed-strategy)).
 
-### 2.2 `Product` — raíz de agregado (catálogo)
+### 2.2 `Product` — aggregate root (catalog)
 
-| Invariante | Quién la hace cumplir | Marca |
+| Invariant | Who enforces it | Mark |
 |---|---|---|
-| Nombre obligatorio y no vacío; se guarda recortado | `Product.Rename` | **solo dominio** (`NOT NULL` sí está en el motor; *no vacío* no) |
-| `price > 0` | `Product.ChangePrice` | **solo dominio** · T-20 |
-| `stock >= 0` tras cualquier operación | `Product.Withdraw` / `Product.Restock` | **motor** — `ck_product_stock_non_negative`, la última barrera de ADR-002 |
-| Retirar más stock del disponible falla | `Product.Withdraw` | **solo dominio** — es una regla de proceso, no expresable en un `CHECK` |
-| Categoría obligatoria y existente | `Product.SetCategory` + `FK_product_category_category_id` | **motor** |
-| `image_key` ausente ⇒ `NULL`, nunca cadena vacía | `Product.AttachImage` normaliza en blanco a `null` | **solo dominio** · *no hay* regla equivalente pendiente: el `NULL` es la única representación y basta con `image_key IS NULL` |
-| Nunca se borra físicamente: baja lógica | Propiedad sombra `deleted_at` + filtro global | **motor** desde T-09 · la columna existe y el filtro global la aplica — ver [ADR-003](adr/adr-003-baja-logica.md) |
+| Name required and non-empty; stored trimmed | `Product.Rename` | **domain only** (`NOT NULL` is in the engine; *non-empty* is not) |
+| `price > 0` | `Product.ChangePrice` | **domain only** · T-20 |
+| `stock >= 0` after any operation | `Product.Withdraw` / `Product.Restock` | **engine** — `ck_product_stock_non_negative`, ADR-002's last line of defense |
+| Withdrawing more stock than available fails | `Product.Withdraw` | **domain only** — it's a process rule, not expressible as a `CHECK` |
+| Category required and existing | `Product.SetCategory` + `FK_product_category_category_id` | **engine** |
+| `image_key` absent ⇒ `NULL`, never empty string | `Product.AttachImage` normalizes blank to `null` | **domain only** · *there is no* equivalent pending rule: `NULL` is the only representation and `image_key IS NULL` is enough |
+| Never physically deleted: soft delete | Shadow property `deleted_at` + global filter | **engine** since T-09 · the column exists and the global filter applies it — see [ADR-003](adr/adr-003-soft-delete.md) |
 
-**`Money` admite importe cero y esto importa.** Su constructor rechaza solo los negativos, así que
-`new Money(0)` es válido. La única guarda de `price > 0` es `Product.ChangePrice`: un producto a
-precio 0 insertado por `psql` hoy pasa. Es exactamente el hueco que cierra el `CHECK` de T-20.
+**`Money` allows a zero amount, and this matters.** Its constructor rejects only negatives, so
+`new Money(0)` is valid. The only guard on `price > 0` is `Product.ChangePrice`: a product priced
+at 0 inserted via `psql` passes today. That's exactly the gap T-20's `CHECK` closes.
 
-**La regla de redondeo vive en `Money`, no en la columna.** `Money` redondea a **2 decimales con
-`MidpointRounding.AwayFromZero`** antes de guardar; la columna es `numeric(18,2)`. Coinciden por
-construcción, no por casualidad. **Si una cambia, la otra cambia en la misma migración**: con más
-decimales en la columna la precisión extra sería siempre cero, y con más decimales en `Money` el
-motor recortaría por su cuenta y el importe leído dejaría de ser el escrito.
+**The rounding rule lives in `Money`, not in the column.** `Money` rounds to **2 decimal places
+with `MidpointRounding.AwayFromZero`** before saving; the column is `numeric(18,2)`. They match by
+construction, not by coincidence. **If one changes, the other changes in the same migration**:
+with more decimals in the column the extra precision would always be zero, and with more decimals
+in `Money` the engine would truncate on its own and the amount read would no longer match what was
+written.
 
-### 2.3 `Sale` — raíz de agregado (ventas)
+### 2.3 `Sale` — aggregate root (sales)
 
-| Invariante | Quién la hace cumplir | Marca |
+| Invariant | Who enforces it | Mark |
 |---|---|---|
-| Registra quién la realiza; obligatorio y no vacío | Constructor de `Sale` | **solo dominio** (`NOT NULL` sí está en el motor) |
-| **Al menos una línea** para poder confirmarse | `Sale.EnsureConfirmable` | **solo dominio** — no expresable en un `CHECK`; exigiría un disparador diferido |
-| **Un producto no se repite** dentro de la misma venta | `Sale.AddItem` rechaza el duplicado | **solo dominio** *y ahora también* **motor**: el índice único `(sale_id, product_id)` existe desde T-20, con `INCLUDE (quantity, unit_price)` |
-| Descontar stock y añadir la línea son **una sola operación** | `Sale.AddItem` llama a `Product.Withdraw` antes de añadir | **solo dominio** — es la regla que da sentido al agregado |
-| Inmutable una vez registrada | No existe puerto de edición ni de borrado | **solo dominio** (por ausencia de operación) |
+| Records who made it; required and non-empty | `Sale` constructor | **domain only** (`NOT NULL` is in the engine) |
+| **At least one line** to be confirmable | `Sale.EnsureConfirmable` | **domain only** — not expressible as a `CHECK`; would require a deferred trigger |
+| **A product doesn't repeat** within the same sale | `Sale.AddItem` rejects the duplicate | **domain only** *and now also* **engine**: the unique index `(sale_id, product_id)` has existed since T-20, with `INCLUDE (quantity, unit_price)` |
+| Deducting stock and adding the line are **a single operation** | `Sale.AddItem` calls `Product.Withdraw` before adding | **domain only** — it's the rule that gives the aggregate its meaning |
+| Immutable once recorded | No edit or delete port exists | **domain only** (by absence of operation) |
 
-**La venta no conoce la moneda.** El total se calcula sumando subtotales y `Money` exige la misma
-moneda al sumar; como el mapeo reconstruye siempre la moneda por defecto, hoy no puede fallar. **La
-guarda explícita en `Sale.AddItem` es deuda barata y tiene tarea: T-05.**
+**The sale doesn't know the currency.** The total is computed by summing subtotals and `Money`
+requires matching currency when summing; since the mapping always reconstructs the default
+currency, it can't fail today. **The explicit guard in `Sale.AddItem` is cheap debt and has a
+task: T-05.**
 
-### 2.4 `SaleItem` — entidad interna del agregado `Sale`
+### 2.4 `SaleItem` — internal entity of the `Sale` aggregate
 
-| Invariante | Quién la hace cumplir | Marca |
+| Invariant | Who enforces it | Mark |
 |---|---|---|
-| Producto obligatorio | Constructor de `SaleItem` + `NOT NULL` | **motor** · `NOT NULL` y la **FK** `FK_sale_item_product_product_id` con `RESTRICT`, puesta por T-20 |
-| `quantity > 0` | Constructor de `Quantity` | **solo dominio** · T-20 |
-| Nombre y precio **congelados** en el instante de la venta | `Sale.AddItem` copia de `Product` | **solo dominio**, por construcción |
-| Nombre de **categoría congelado** | Constructor de `SaleItem` + `NOT NULL` | **motor** (T-11) · `sale_item.category_name`, sin clave foránea a propósito — D-06 y [ADR-004](adr/adr-004-reporte-agregado-y-congelado.md) |
-| **No existe fuera de su venta** | `FK_sale_item_sale_sale_id ON DELETE CASCADE` | **motor** entero: la cascada y el `sale_id NOT NULL` que la completa, puesto por T-20 |
+| Product required | `SaleItem` constructor + `NOT NULL` | **engine** · `NOT NULL` and the **FK** `FK_sale_item_product_product_id` with `RESTRICT`, added by T-20 |
+| `quantity > 0` | `Quantity` constructor | **domain only** · T-20 |
+| Name and price **frozen** at the moment of sale | `Sale.AddItem` copies from `Product` | **domain only**, by construction |
+| **Category name frozen** | `SaleItem` constructor + `NOT NULL` | **engine** (T-11) · `sale_item.category_name`, deliberately with no foreign key — D-06 and [ADR-004](adr/adr-004-aggregate-frozen-report.md) |
+| **Doesn't exist outside its sale** | `FK_sale_item_sale_sale_id ON DELETE CASCADE` | **engine**, entirely: the cascade and the `sale_id NOT NULL` that completes it, added by T-20 |
 
-**No se construye desde fuera.** Su constructor es `internal` y solo `Sale.AddItem` lo invoca: no
-hay forma legítima de fabricar una línea suelta.
+**Not constructible from outside.** Its constructor is `internal` and only `Sale.AddItem` invokes
+it: there's no legitimate way to manufacture a loose line.
 
-### 2.5 `User` — raíz de agregado (identidad)
+### 2.5 `User` — aggregate root (identity)
 
-| Invariante | Quién la hace cumplir | Marca |
+| Invariant | Who enforces it | Mark |
 |---|---|---|
-| Nombre de usuario obligatorio y **único** | Constructor + índice único `IX_user_username` | **motor** (unicidad) |
-| Nombre de usuario **en minúsculas y recortado** | `User.NormalizeUsername` | **solo dominio** · T-20 |
-| Hash de clave obligatorio y no vacío | Constructor de `User` | **solo dominio** (`NOT NULL` sí está en el motor) |
-| `role` en `('admin','seller')` | `Roles.IsValid` | **solo dominio** · T-20 |
-| El dominio **nunca ve la clave en claro** | El hash lo produce un puerto (D-09) | Por diseño del hexágono |
+| Username required and **unique** | Constructor + unique index `IX_user_username` | **engine** (uniqueness) |
+| Username **lowercase and trimmed** | `User.NormalizeUsername` | **domain only** · T-20 |
+| Password hash required and non-empty | `User` constructor | **domain only** (`NOT NULL` is in the engine) |
+| `role` in `('admin','seller')` | `Roles.IsValid` | **domain only** · T-20 |
+| The domain **never sees the plaintext password** | The hash is produced by a port (D-09) | By hexagon design |
 
-**Por qué la normalización es una invariante y no una comodidad.** Una búsqueda que se saltara
-`NormalizeUsername` dejaría registrar `"Ana "` como cuenta nueva que **nunca podría iniciar
-sesión**: el agregado la guardaría como `ana` y chocaría con la existente.
+**Why normalization is an invariant and not a convenience.** A lookup that skipped
+`NormalizeUsername` would allow registering `"Ana "` as a new account that **could never log in**:
+the aggregate would store it as `ana` and collide with the existing one.
 
 ---
 
-## 3. Modelo físico — las 22 columnas
+## 3. Physical model — the 22 columns
 
-Esquema `sales` de la base `simple_stock_flow`. **Ninguna columna tiene `DEFAULT`, y es deliberado: los
-valores los pone el dominio**, nunca el motor —un defecto del motor sería una segunda fuente de
-verdad que nadie prueba—. Los tipos son los que devuelve `information_schema.columns` hoy; la salida
-literal está en [§10](#10-cómo-se-comprueba-que-este-documento-no-miente).
+Schema `sales` of the `simple_stock_flow` database. **No column has a `DEFAULT`, and that's
+deliberate: values are set by the domain**, never by the engine —a default in the engine would be
+a second source of truth that nobody tests—. The types are what `information_schema.columns`
+returns today; the literal output is in [§10](#10-how-this-document-is-checked-for-lying).
 
-**Tablas en singular, sin excepción**, según la convención de
-[§0](#0-convención-de-nombres-del-esquema). Ahí está el porqué y la verificación de `user`; aquí no
-se repite.
+**Tables singular, no exceptions**, per the convention in
+[§0](#0-schema-naming-convention). The why and the verification for `user` are there; not repeated
+here.
 
-**`category`** — datos semilla de solo lectura (D-10).
+**`category`** — read-only seed data (D-10).
 
-| Columna | Tipo | Nulable | Defecto | Nota |
+| Column | Type | Nullable | Default | Note |
 |---|---|---|---|---|
-| `id` | `uuid` | no | ninguno | Clave primaria. Identificadores literales en la migración, para que las pruebas los referencien ([§9](#9-estrategia-de-semilla)) |
-| `name` | `varchar(120)` | no | ninguno | Único |
+| `id` | `uuid` | no | none | Primary key. Literal identifiers in the migration, so tests can reference them ([§9](#9-seed-strategy)) |
+| `name` | `varchar(120)` | no | none | Unique |
 
 **`product`**
 
-| Columna | Tipo | Nulable | Defecto | Nota |
+| Column | Type | Nullable | Default | Note |
 |---|---|---|---|---|
-| `id` | `uuid` | no | ninguno | Clave primaria |
-| `name` | `varchar(200)` | no | ninguno | El dominio lo recorta antes de guardar |
-| `price` | `numeric(18,2)` | no | ninguno | Solo el importe: **sin columna de moneda** (D-05). 16 dígitos enteros, de sobra para el alcance |
-| `stock` | `integer` | no | ninguno | |
-| `category_id` | `uuid` | no | ninguno | Clave foránea restrictiva a `category` — [§5](#5-política-de-claves-foráneas) FK-1 |
-| `image_key` | `varchar(512)` | **sí** | ninguno | Clave opaca, nunca ruta ni bytes (D-08) |
-| `category_name` | `varchar(120)` | no | ninguno | **motor** (T-11) · la etiqueta congelada en el instante de la venta. **Sin clave foránea a propósito**: si la tuviera, renombrar la categoría reescribiría el histórico, que es justo lo que ADR-004 prohíbe. Mismo ancho que `category.name`, y **las dos se mueven juntas** |
-| `deleted_at` | `timestamptz` | sí | ninguno | **motor** (T-09, verificado contra `information_schema`: nulable, sin defecto) · propiedad sombra, sin propiedad en el agregado (D-03). Nula mientras el producto está activo: así sirve de predicado a los índices parciales |
-| `xmin` | `xid` | — | — | **Columna de sistema del motor**, no del esquema. Postgres la incrementa en cada `UPDATE`. Es el testigo de concurrencia de D-04, expuesto como propiedad sombra (T-10). **No aparece en `information_schema` porque no es una columna declarada**, así que no cuenta entre las 21 |
+| `id` | `uuid` | no | none | Primary key |
+| `name` | `varchar(200)` | no | none | The domain trims it before saving |
+| `price` | `numeric(18,2)` | no | none | Amount only: **no currency column** (D-05). 16 integer digits, plenty for the scope |
+| `stock` | `integer` | no | none | |
+| `category_id` | `uuid` | no | none | Restrictive foreign key to `category` — [§5](#5-foreign-key-policy) FK-1 |
+| `image_key` | `varchar(512)` | **yes** | none | Opaque key, never a path or bytes (D-08) |
+| `category_name` | `varchar(120)` | no | none | **engine** (T-11) · the label frozen at the moment of sale. **No foreign key, on purpose**: if it had one, renaming the category would rewrite history, which is exactly what ADR-004 forbids. Same width as `category.name`, and **the two move together** |
+| `deleted_at` | `timestamptz` | yes | none | **engine** (T-09, verified against `information_schema`: nullable, no default) · shadow property, no property on the aggregate (D-03). Null while the product is active: that's what makes it serve as a predicate for partial indexes |
+| `xmin` | `xid` | — | — | **System column of the engine**, not of the schema. Postgres increments it on every `UPDATE`. It's D-04's concurrency witness, exposed as a shadow property (T-10). **It doesn't appear in `information_schema` because it's not a declared column**, so it doesn't count among the 21 |
 
-**`sale`** — el esquema `sales` agrupa el sistema entero; la tabla `sale` nombra el agregado. **El
-singular deshace la colisión que había**: hasta el renombrado existía una tabla `sales` dentro del
-esquema `sales` y la cualificación era `sales.sales`. Hoy es `sales.sale`, y el prefijo no cambia:
-**lo que pasa a singular es la tabla, nunca el esquema**.
+**`sale`** — the `sales` schema groups the entire system; the `sale` table names the aggregate.
+**The singular undoes a collision that existed**: before the rename there was a `sales` table
+inside the `sales` schema and the qualification was `sales.sales`. Today it's `sales.sale`, and the
+prefix doesn't change: **what goes singular is the table, never the schema**.
 
-| Columna | Tipo | Nulable | Defecto | Nota |
+| Column | Type | Nullable | Default | Note |
 |---|---|---|---|---|
-| `id` | `uuid` | no | ninguno | Clave primaria |
-| `sold_at` | `timestamptz` | no | ninguno | Instante de la venta. **Es el único instante de negocio del sistema** ([§8](#8-auditoría-created_at--updated_at)) |
-| `sold_by` | `varchar(120)` | no | ninguno | **Hoy se llama así.** Se renombra a `sold_by_username` en **T-12** (ver nota abajo) |
-| `sold_by_user_id` | `uuid` | no | ninguno | **pendiente (T-12)** · clave foránea restrictiva a `user.id` — FK-4 |
+| `id` | `uuid` | no | none | Primary key |
+| `sold_at` | `timestamptz` | no | none | Moment of the sale. **It's the system's only business instant** ([§8](#8-audit-created_at--updated_at)) |
+| `sold_by` | `varchar(120)` | no | none | **Called this today.** Renamed to `sold_by_username` in **T-12** (see note below) |
+| `sold_by_user_id` | `uuid` | no | none | **pending (T-12)** · restrictive foreign key to `user.id` — FK-4 |
 
 **`sale_item`**
 
-| Columna | Tipo | Nulable | Defecto | Nota |
+| Column | Type | Nullable | Default | Note |
 |---|---|---|---|---|
-| `id` | `uuid` | no | ninguno | Clave primaria |
-| `product_id` | `uuid` | no | ninguno | **Sin clave foránea hoy** — FK-3, [§5](#5-política-de-claves-foráneas) |
-| `product_name` | `varchar(200)` | no | ninguno | Copia congelada de `product.name`, **misma longitud a propósito** |
-| `quantity` | `integer` | no | ninguno | |
-| `unit_price` | `numeric(18,2)` | no | ninguno | Copia congelada del precio. **Una sola columna**: sin `unit_price_currency` (D-05) |
-| `sale_id` | `uuid` | **sí — es un defecto** | ninguno | Debe pasar a `NOT NULL`: una línea sin venta no significa nada, contradice la cascada ya configurada y deja inservible el compuesto único. Causa: `HasForeignKey("sale_id")` crea una propiedad sombra y EF la hace nulable si la relación no declara `IsRequired()` |
-| `category_name` | `varchar(120)` | no | ninguno | **pendiente (T-11)** · longitud igual a `category.name` porque es una copia congelada de ese valor (D-06). `NOT NULL` **es gratis hoy porque la tabla está vacía**; deja de serlo con la primera venta, y entonces la migración necesita un relleno |
+| `id` | `uuid` | no | none | Primary key |
+| `product_id` | `uuid` | no | none | **No foreign key today** — FK-3, [§5](#5-foreign-key-policy) |
+| `product_name` | `varchar(200)` | no | none | Frozen copy of `product.name`, **same length on purpose** |
+| `quantity` | `integer` | no | none | |
+| `unit_price` | `numeric(18,2)` | no | none | Frozen copy of the price. **A single column**: no `unit_price_currency` (D-05) |
+| `sale_id` | `uuid` | **yes — a defect** | none | Must become `NOT NULL`: a line without a sale means nothing, contradicts the cascade already configured, and leaves the unique composite useless. Cause: `HasForeignKey("sale_id")` creates a shadow property and EF makes it nullable if the relationship doesn't declare `IsRequired()` |
+| `category_name` | `varchar(120)` | no | none | **pending (T-11)** · same length as `category.name` because it's a frozen copy of that value (D-06). `NOT NULL` **is free today because the table is empty**; it stops being free with the first sale, and then the migration needs a backfill |
 
 **`user`**
 
-| Columna | Tipo | Nulable | Defecto | Nota |
+| Column | Type | Nullable | Default | Note |
 |---|---|---|---|---|
-| `id` | `uuid` | no | ninguno | Clave primaria |
-| `username` | `varchar(120)` | no | ninguno | Único. Se guarda en minúsculas y recortado |
-| `password_hash` | `varchar(512)` | no | ninguno | **Nunca se indexa** ([§7](#7-privacidad-y-retención)) |
-| `role` | `varchar(40)` | no | ninguno | Conjunto cerrado: `admin`, `seller` |
+| `id` | `uuid` | no | none | Primary key |
+| `username` | `varchar(120)` | no | none | Unique. Stored lowercase and trimmed |
+| `password_hash` | `varchar(512)` | no | none | **Never indexed** ([§7](#7-privacy-and-retention)) |
+| `role` | `varchar(40)` | no | none | Closed set: `admin`, `seller` |
 
-**Dos reglas transversales, escritas para que nadie las infiera.**
+**Two cross-cutting rules, written so nobody has to infer them.**
 
-1. **Sin columna de moneda en ninguna tabla: el sistema es monomoneda** (D-05). No se reintroduce.
-2. **Todas las marcas de tiempo son `timestamptz`, sin excepción.** El servidor corre en UTC. Quien
-   añada una columna de fecha nueva no tiene que deducirlo de `sold_at`.
+1. **No currency column in any table: the system is single-currency** (D-05). Not reintroduced.
+2. **All timestamps are `timestamptz`, without exception.** The server runs in UTC. Whoever adds a
+   new date column doesn't have to infer it from `sold_at`.
 
-**Sobre los dos nombres de `sold_by`.** La columna se llama `sold_by` en el motor y `Sale.SoldBy` en
-el dominio. **Se alinea el código con el nombre largo y no al revés**, porque en cuanto T-12 añada
-`sold_by_user_id` al lado, `sold_by` a secas no dirá cuál de los dos es. El renombrado **no toca el
-contrato de la API** —el campo que viaja es `SaleView.SoldBy` y no cambia— y es barato ahora porque
-la tabla está vacía.
+**On `sold_by`'s two names.** The column is called `sold_by` in the engine and `Sale.SoldBy` in the
+domain. **The code is aligned to the long name, not the other way around**, because as soon as
+T-12 adds `sold_by_user_id` alongside it, plain `sold_by` won't say which of the two it is. The
+rename **doesn't touch the API contract** —the field that travels is `SaleView.SoldBy` and doesn't
+change— and it's cheap now because the table is empty.
 
-### 3.1 Convención de nombres — hoy conviven dos estilos
+### 3.1 Naming convention — today two styles coexist
 
-Lo que genera EF conserva su estilo: `PK_`, `IX_`, `FK_`, en `PascalCase` y entrecomillado. Lo que
-se escribe a mano —que hoy son **solo los `CHECK`**— va en `snake_case` con el patrón
-`ck_{tabla}_{regla}`, como el `ck_product_stock_non_negative` que ya existe. **Las dos convenciones
-son deliberadas:** renombrar lo que genera EF obligaría a mantener una lista paralela de nombres en
-cada migración.
+What EF generates keeps its style: `PK_`, `IX_`, `FK_`, in `PascalCase` and quoted. What's written
+by hand —which today is **only the `CHECK`s**— goes in `snake_case` with the pattern
+`ck_{table}_{rule}`, like the existing `ck_product_stock_non_negative`. **The two conventions are
+deliberate:** renaming what EF generates would force keeping a parallel name list in every
+migration.
 
-**Los nombres derivados siguen a la tabla.** Al pasar las tablas a singular ([§0](#0-convención-de-nombres-del-esquema)),
-EF regenera los suyos —`PK_product`, `IX_category_name`, `FK_sale_item_sale_sale_id`— sin que nadie
-los escriba. **El único que hay que renombrar a mano es el `CHECK`**, precisamente porque no lo
-genera EF: `ck_products_stock_non_negative` pasó a `ck_product_stock_non_negative`. Dejarlo con el
-nombre viejo habría sido el único objeto del esquema en plural.
+**Derived names follow the table.** When tables moved to singular ([§0](#0-schema-naming-convention)),
+EF regenerated its own —`PK_product`, `IX_category_name`, `FK_sale_item_sale_sale_id`— with no one
+writing them. **The only one that has to be renamed by hand is the `CHECK`**, precisely because EF
+doesn't generate it: `ck_products_stock_non_negative` became `ck_product_stock_non_negative`.
+Leaving it with the old name would have been the only object in the schema left in plural.
 
-### 3.2 Migraciones aplicadas
+### 3.2 Applied migrations
 
-Cuatro, no una. El esquema lo poseen las migraciones de EF y **nada más** ([ADR-001](adr/adr-001-propiedad-del-esquema.md)).
+Four, not one. The schema is owned by the EF migrations **and nothing else** ([ADR-001](adr/adr-001-schema-ownership.md)).
 
-| Migración | Qué hace | Tarea |
+| Migration | What it does | Task |
 |---|---|---|
-| `20260919175513_InitialSchema` | Las cinco tablas, las dos claves foráneas, los índices únicos y de acceso, y **las cinco categorías semilla dentro** | T-02 |
-| `20260919194003_StockNonNegative` | El único `CHECK` del esquema | T-10 |
-| `20260919203018_AccentSeedCategoryNames` | Corrige el acento de una categoría sembrada: *Fontaneria* → *Fontanería* | T-02 |
-| `20260919215344_RenameTablesToSingular` | Las cinco tablas pasan a singular ([§0](#0-convención-de-nombres-del-esquema)). Con ellas, los nombres que EF deriva —claves primarias, índices y claves foráneas— y, **a mano, el único `CHECK`**: `ck_products_stock_non_negative` → `ck_product_stock_non_negative`. **Ninguna columna se renombra** | T-02 |
+| `20260919175513_InitialSchema` | The five tables, the two foreign keys, the unique and access indexes, and **the five seed categories included** | T-02 |
+| `20260919194003_StockNonNegative` | The schema's only `CHECK` | T-10 |
+| `20260919203018_AccentSeedCategoryNames` | Fixes the accent of a seeded category: *Fontaneria* → *Fontanería* | T-02 |
+| `20260919215344_RenameTablesToSingular` | The five tables move to singular ([§0](#0-schema-naming-convention)). Along with them, the names EF derives —primary keys, indexes and foreign keys— and, **by hand, the only `CHECK`**: `ck_products_stock_non_negative` → `ck_product_stock_non_negative`. **No column is renamed** | T-02 |
 
-**El renombrado es una migración y no un retoque del documento.** Va por el mismo camino que todo el
-DDL del sistema —ADR-001 no admite otro— y se aplicó con `product`, `sale` y `sale_item` **vacías**,
-`category` con 5 filas y `user` con 1: un `ALTER TABLE ... RENAME TO` instantáneo. Con la primera
-venta real seguiría siendo posible, pero ya no gratis.
+**The rename is a migration, not a document touch-up.** It travels the same path as all the
+system's DDL —ADR-001 allows no other— and was applied with `product`, `sale` and `sale_item`
+**empty**, `category` with 5 rows and `user` with 1: an instantaneous `ALTER TABLE ... RENAME TO`.
+With the first real sale it would still be possible, but no longer free.
 
-El historial vive en `public."__EFMigrationsHistory"` —**fuera del esquema `sales`**, que es por lo
-que la consulta de columnas devuelve 21 y no más—.
+The history lives in `public."__EFMigrationsHistory"` —**outside the `sales` schema**, which is why
+the column query returns 21 and not more—.
 
 ---
 
-## 4. Restricciones e índices: dónde vive cada regla
+## 4. Constraints and indexes: where each rule lives
 
-**Hoy el esquema tiene ocho restricciones: cinco claves primarias, dos claves foráneas y un solo
-`CHECK`.** Las dos unicidades (`category.name`, `user.username`) las impone el motor mediante
-**índice único**, no mediante restricción, así que no salen en `pg_constraint` pero **sí se
-cumplen**. Todo lo demás es dominio o es pendiente.
+**Today the schema has eight constraints: five primary keys, two foreign keys and a single
+`CHECK`.** The two uniqueness rules (`category.name`, `user.username`) are enforced by the engine
+via a **unique index**, not a constraint, so they don't show up in `pg_constraint` but **they are
+enforced**. Everything else is domain or pending.
 
-| Regla | Objeto en el motor | Dónde vive hoy |
+| Rule | Object in the engine | Where it lives today |
 |---|---|---|
-| Clave primaria de las 5 tablas | `PK_category`, `PK_product`, `PK_sale`, `PK_sale_item`, `PK_user` | **motor** |
-| `category.name` único | `IX_category_name` (índice único) | **motor** |
-| `user.username` único | `IX_user_username` (índice único) | **motor** |
-| `product.category_id` → `category.id`, `ON DELETE RESTRICT` | `FK_product_category_category_id` | **motor** |
-| `sale_item.sale_id` → `sale.id`, `ON DELETE CASCADE` | `FK_sale_item_sale_sale_id` | **motor** |
-| `product.stock >= 0` | `ck_product_stock_non_negative` | **motor** — la última barrera de ADR-002 |
-| `product.price > 0` | — | **solo dominio** · `Product.ChangePrice`. La baja al motor es **T-20**. Ver `Money` en [§2.2](#22-product--raíz-de-agregado-catálogo) |
-| `sale_item.quantity > 0` | — | **solo dominio** · constructor de `Quantity`. La baja al motor es **T-20** |
-| `category.name` no vacío | — | **solo dominio** · `Category.Rename`. La baja al motor es **T-20** |
-| `user.role` en `('admin','seller')` | — | **solo dominio** · `Roles.IsValid`. La baja al motor es **T-20** |
-| `user.username` en minúsculas | — | **solo dominio** · `User.NormalizeUsername`. La baja al motor es **T-20** |
-| `sale_item.sale_id NOT NULL` | `sale_item.sale_id` | **motor** (T-20) · era el prerrequisito del compuesto único, y por eso fue primero |
-| Único `(sale_id, product_id)` | `IX_sale_item_sale_id_product_id` | **motor** (T-20) · **no puede cumplir su función mientras `sale_id` admita nulos:** en un índice único cada `NULL` es distinto de cualquier otro, así que dos líneas con `sale_id` nulo y el mismo producto conviven sin protestar |
-| `sale_item.product_id` → `product.id`, `ON DELETE RESTRICT` | `FK_sale_item_product_product_id` | **motor** (T-20) · **No es una decisión nueva: ADR-003 ya se apoya en ella** como *barrera de última instancia para que un borrado manual falle ruidosamente*. Nunca se implementó, y hoy `sale_item` no tiene **ninguna** clave foránea hacia el catálogo |
-| `sale.sold_by_user_id` → `user.id`, `ON DELETE RESTRICT` | — | **pendiente (T-12)** · la autoría de una venta no puede quedar huérfana |
-| Índices de acceso (`product`, `sale`, `sale_item`) | ver [§6.2](#62-índices-los-que-hay-y-los-que-faltan) | Tres existen, tres faltan — **§6.2 los separa uno por uno** |
+| Primary key of the 5 tables | `PK_category`, `PK_product`, `PK_sale`, `PK_sale_item`, `PK_user` | **engine** |
+| `category.name` unique | `IX_category_name` (unique index) | **engine** |
+| `user.username` unique | `IX_user_username` (unique index) | **engine** |
+| `product.category_id` → `category.id`, `ON DELETE RESTRICT` | `FK_product_category_category_id` | **engine** |
+| `sale_item.sale_id` → `sale.id`, `ON DELETE CASCADE` | `FK_sale_item_sale_sale_id` | **engine** |
+| `product.stock >= 0` | `ck_product_stock_non_negative` | **engine** — ADR-002's last line of defense |
+| `product.price > 0` | — | **domain only** · `Product.ChangePrice`. Lowering it to the engine is **T-20**. See `Money` in [§2.2](#22-product--aggregate-root-catalog) |
+| `sale_item.quantity > 0` | — | **domain only** · `Quantity` constructor. Lowering it to the engine is **T-20** |
+| `category.name` non-empty | — | **domain only** · `Category.Rename`. Lowering it to the engine is **T-20** |
+| `user.role` in `('admin','seller')` | — | **domain only** · `Roles.IsValid`. Lowering it to the engine is **T-20** |
+| `user.username` lowercase | — | **domain only** · `User.NormalizeUsername`. Lowering it to the engine is **T-20** |
+| `sale_item.sale_id NOT NULL` | `sale_item.sale_id` | **engine** (T-20) · was the prerequisite for the unique composite, which is why it came first |
+| Unique `(sale_id, product_id)` | `IX_sale_item_sale_id_product_id` | **engine** (T-20) · **can't do its job while `sale_id` allows nulls:** in a unique index every `NULL` is distinct from any other, so two lines with `sale_id` null and the same product coexist without complaint |
+| `sale_item.product_id` → `product.id`, `ON DELETE RESTRICT` | `FK_sale_item_product_product_id` | **engine** (T-20) · **Not a new decision: ADR-003 already relies on it** as a *last-resort barrier so a manual delete fails loudly*. Never implemented, and today `sale_item` has **no** foreign key to the catalog |
+| `sale.sold_by_user_id` → `user.id`, `ON DELETE RESTRICT` | — | **pending (T-12)** · the authorship of a sale can't be left orphaned |
+| Access indexes (`product`, `sale`, `sale_item`) | see [§6.2](#62-indexes-what-exists-and-what-is-missing) | Three exist, three are missing — **§6.2 breaks them down one by one** |
 
-**Bajar al motor las cinco invariantes marcadas *solo dominio* es la deuda concreta de este
-documento, y tiene tarea: T-20.** No cambia ni una línea de dominio: son cinco `CHECK` y un índice.
-Lo que cambia es que dejan de depender de que todo el mundo pase por el adaptador.
+**Lowering the five invariants marked *domain only* to the engine is this document's concrete
+debt, and it has a task: T-20.** It doesn't change a single line of domain code: it's five `CHECK`s
+and one index. What changes is that they stop depending on everyone going through the adapter.
 
-### 4.1 Acentos y mayúsculas en `category.name`: la unicidad se queda sensible a ambos
+### 4.1 Accents and case in `category.name`: uniqueness stays case/accent sensitive
 
-*Fontanería* y *Fontaneria* son dos filas válidas, y *Pinturas* y *pinturas* también. **Se acepta a
-sabiendas y por escrito, no por descuido:** las cinco categorías son datos semilla de solo lectura,
-no hay CRUD de categorías y ningún puerto las crea, así que **nadie puede provocar la colisión por
-la interfaz**. La alternativa —`citext`, o un índice único sobre `unaccent(lower(name))`— añade una
-extensión al despliegue para proteger una tabla en la que nadie escribe.
+*Fontanería* and *Fontaneria* are two valid rows, and so are *Pinturas* and *pinturas*. **Accepted
+knowingly and on record, not by oversight:** the five categories are read-only seed data, there's
+no category CRUD and no port creates them, so **nobody can trigger the collision through the
+interface**. The alternative —`citext`, or a unique index over `unaccent(lower(name))`— adds an
+extension to the deployment to protect a table nobody writes to.
 
-**Condición de revisión, explícita: si algún día se abre el mantenimiento de categorías, esta
-decisión se revisa antes de escribir ese CRUD.**
+**Explicit review condition: if category maintenance is ever opened up, this decision is revisited
+before that CRUD is written.**
 
 ---
 
-## 5. Política de claves foráneas
+## 5. Foreign key policy
 
-**Cuatro relaciones, cuatro claves foráneas previstas. Hoy existen dos.** Esta tabla es la política
-completa: el `ON DELETE` de cada una, su `ON UPDATE`, y **por qué**.
+**Four relationships, four planned foreign keys. Two exist today.** This table is the full
+policy: each one's `ON DELETE`, its `ON UPDATE`, and **why**.
 
-| # | Clave foránea | Referencia | `ON DELETE` | `ON UPDATE` | Estado | Por qué esa acción |
+| # | Foreign key | Reference | `ON DELETE` | `ON UPDATE` | State | Why that action |
 |---|---|---|---|---|---|---|
-| **FK-1** | `product.category_id` | `category.id` | **`RESTRICT`** | `NO ACTION` | **motor** | Una categoría con productos no se elimina. Hoy es teórico —no hay puerto de borrado de categorías— pero **la restricción debe existir antes de que lo haya**, no después |
-| **FK-2** | `sale_item.sale_id` | `sale.id` | **`CASCADE`** | `NO ACTION` | **motor** | Composición pura: la línea no tiene vida fuera de su venta. **En la práctica nunca se dispara**, porque las ventas no se borran ([§7.1](#71-retención)). Está para que el modelo diga la verdad sobre la naturaleza de la relación, no para usarse |
-| **FK-3** | `sale_item.product_id` | `product.id` | **`RESTRICT`** | `NO ACTION` | **motor** (T-20) | **Barrera de última instancia.** Un borrado físico jamás debe poder huerfanar una línea de venta ni romper el reporte. Con la baja lógica de ADR-003 nunca se dispara; existe para que un `DELETE` manual o un cambio de código futuro **falle ruidosamente** en vez de corromper el histórico |
-| **FK-4** | `sale.sold_by_user_id` | `user.id` | **`RESTRICT`** | `NO ACTION` | **pendiente (T-12)** | La autoría de una venta es un dato contable. Un usuario con ventas no se elimina |
+| **FK-1** | `product.category_id` | `category.id` | **`RESTRICT`** | `NO ACTION` | **engine** | A category with products isn't deleted. Today it's theoretical —there's no category-delete port— but **the constraint must exist before there is one**, not after |
+| **FK-2** | `sale_item.sale_id` | `sale.id` | **`CASCADE`** | `NO ACTION` | **engine** | Pure composition: the line has no life outside its sale. **In practice it never fires**, because sales aren't deleted ([§7.1](#71-retention)). It's there so the model tells the truth about the nature of the relationship, not to be used |
+| **FK-3** | `sale_item.product_id` | `product.id` | **`RESTRICT`** | `NO ACTION` | **engine** (T-20) | **Last-resort barrier.** A physical delete must never be able to orphan a sale line or break the report. With ADR-003's soft delete it never fires; it exists so a manual `DELETE` or a future code change **fails loudly** instead of corrupting the history |
+| **FK-4** | `sale.sold_by_user_id` | `user.id` | **`RESTRICT`** | `NO ACTION` | **pending (T-12)** | A sale's authorship is accounting data. A user with sales isn't deleted |
 
-**`ON UPDATE NO ACTION` en las cuatro, y es una decisión, no un descuido.** Todas las claves
-primarias son UUID generados por la aplicación y **jamás cambian**. No existe escenario de
-actualización de clave, así que un `CASCADE` en `UPDATE` sería maquinaria muerta que ocultaría un
-error el día que se disparase. Verificado: `pg_get_constraintdef` no imprime cláusula `ON UPDATE`
-para las dos existentes, que es como Postgres representa `NO ACTION` ([§10](#10-cómo-se-comprueba-que-este-documento-no-miente)).
+**`ON UPDATE NO ACTION` on all four, and it's a decision, not an oversight.** All primary keys are
+application-generated UUIDs and **never change**. There's no key-update scenario, so a `CASCADE` on
+`UPDATE` would be dead machinery that would hide a bug the day it ever fired. Verified:
+`pg_get_constraintdef` prints no `ON UPDATE` clause for the two existing ones, which is how
+Postgres represents `NO ACTION` ([§10](#10-how-this-document-is-checked-for-lying)).
 
-**La contradicción que este documento cierra.** [ADR-003](adr/adr-003-baja-logica.md) razona sobre
-FK-3 como si existiera —la llama barrera de última instancia— y **nunca se implementó**. Hasta hoy
-ningún documento de `simple-stock-flow-docs` lo decía. Queda dicho, con marca y con tarea.
+**The contradiction this document closes.** [ADR-003](adr/adr-003-soft-delete.md) reasons about
+FK-3 as though it existed —calling it a last-resort barrier— and **it was never implemented**.
+Until today no document in `simple-stock-flow-docs` said so. Now it's stated, with its mark and its
+task.
 
-**Cardinalidades y naturaleza de cada relación:**
+**Cardinalities and nature of each relationship:**
 
-| Origen | Destino | Cardinalidad | Naturaleza | Regla de negocio |
+| Origin | Destination | Cardinality | Nature | Business rule |
 |---|---|---|---|---|
-| `category` | `product` | 1:N | Cruce de agregado, por identidad de raíz | Todo producto pertenece a **exactamente una** categoría, y es obligatoria. Una categoría puede existir sin productos |
-| `sale` | `sale_item` | 1:N | **Interna al agregado** (composición) | Una venta persistible tiene **al menos una** línea. Las líneas no existen fuera de su venta |
-| `sale_item` | `product` | N:1 | Cruce de agregado, por identidad de raíz | Toda línea apunta a un producto existente y **no dado de baja en el momento de la venta** |
-| `sale` | `user` | N:1 | Cruce de agregado, por identidad | Toda venta se atribuye a un usuario existente. La autoría no puede quedar huérfana |
+| `category` | `product` | 1:N | Aggregate crossing, by root identity | Every product belongs to **exactly one** category, and it's required. A category can exist with no products |
+| `sale` | `sale_item` | 1:N | **Internal to the aggregate** (composition) | A persistable sale has **at least one** line. Lines don't exist outside their sale |
+| `sale_item` | `product` | N:1 | Aggregate crossing, by root identity | Every line points to an existing product **not soft-deleted at the time of sale** |
+| `sale` | `user` | N:1 | Aggregate crossing, by identity | Every sale is attributed to an existing user. Authorship can't be left orphaned |
 
-**Relaciones N:M: exactamente una.** `sale` ↔ `product`, resuelta por la entidad asociativa
-`sale_item`, que porta datos propios (`quantity`, `unit_price`, `product_name` y, con T-11,
-`category_name`). **No se introduce ninguna otra tabla puente.** `user` ↔ `role` **no** es N:M: es
-un valor único por usuario dentro de un conjunto cerrado de dos.
+**N:M relationships: exactly one.** `sale` ↔ `product`, resolved by the associative entity
+`sale_item`, which carries its own data (`quantity`, `unit_price`, `product_name` and, with T-11,
+`category_name`). **No other bridge table is introduced.** `user` ↔ `role` is **not** N:M: it's a
+single value per user within a closed set of two.
 
 ---
 
-## 6. Patrones de acceso e índices
+## 6. Access patterns and indexes
 
-> Un índice existe porque una consulta concreta lo necesita. Los que no se ponen **también se
-> justifican**: un índice de más encarece cada escritura para siempre.
+> An index exists because a specific query needs it. The ones not added **are also justified**:
+> an extra index makes every write more expensive forever.
 
-### 6.1 Patrones de acceso reales
+### 6.1 Real access patterns
 
-Derivados de los puertos, no imaginados:
+Derived from the ports, not imagined:
 
-| # | Patrón | Tabla | Filtro | Orden | Página | Frecuencia |
+| # | Pattern | Table | Filter | Order | Paged | Frequency |
 |---|---|---|---|---|---|---|
-| Q1 | Buscar producto | `product` | texto parcial, categoría, **activos** | nombre | Sí | **Alta** |
-| Q2 | Producto por identificador | `product` | clave primaria | — | No | Alta |
-| Q3 | Productos por lote de identificadores | `product` | lote, **activos** | — | No | **Alta** |
-| Q4 | Listar categorías | `category` | — | nombre | No | Alta |
-| Q5 | Categoría por identificador | `category` | clave primaria | — | No | Media |
-| Q6 | Venta con sus líneas | `sale` + `sale_item` | clave y reunión | — | No | Media |
-| Q7 | Ventas por rango | `sale` | rango de fecha | fecha desc | Sí | Alta |
-| Q8 | Ventas por rango sin paginar | `sale` | rango | — | **No** | Baja — ver abajo |
-| Q9 | **Reporte agregado** | `sale` ⋈ `sale_item` | rango, agrupa por producto | importe desc | No | **Alta. La más costosa** |
-| Q10 | Usuario por nombre | `user` | igualdad exacta | — | No | **Alta, en cada inicio de sesión** |
+| Q1 | Search product | `product` | partial text, category, **active** | name | Yes | **High** |
+| Q2 | Product by ID | `product` | primary key | — | No | High |
+| Q3 | Products by ID batch | `product` | batch, **active** | — | No | **High** |
+| Q4 | List categories | `category` | — | name | No | High |
+| Q5 | Category by ID | `category` | primary key | — | No | Medium |
+| Q6 | Sale with its lines | `sale` + `sale_item` | key and join | — | No | Medium |
+| Q7 | Sales by range | `sale` | date range | date desc | Yes | High |
+| Q8 | Sales by range, unpaged | `sale` | range | — | **No** | Low — see below |
+| Q9 | **Aggregated report** | `sale` ⋈ `sale_item` | range, grouped by product | amount desc | No | **High. The most expensive** |
+| Q10 | User by name | `user` | exact equality | — | No | **High, on every login** |
 
-**Q3 es el punto de contención de D-04:** es la lectura que precede a la escritura de stock.
-**Q1 y Q7 implican una consulta de conteo adicional** cada una, porque devuelven el total de
-elementos. **Q8 no tiene consumidor** si el reporte agrega en el motor, que es como debe resolverse:
-sobra, y conviene retirarlo del puerto en vez de dejarlo como trampa.
+**Q3 is D-04's point of contention:** it's the read that precedes the stock write. **Q1 and Q7
+each imply an extra count query**, because they return the total item count. **Q8 has no
+consumer** if the report aggregates in the engine, which is how it should be resolved: it's
+redundant, and should be removed from the port rather than left as a trap.
 
-### 6.2 Índices: los que hay y los que faltan
+### 6.2 Indexes: what exists and what is missing
 
-**No faltan cinco, faltan tres.** `sale (sold_at)` y `sale_item (product_id)` **ya existen** desde
-la migración inicial, y los dos únicos de integridad también. La cuenta anterior los daba por
-pendientes; contrastar con `pg_indexes` ([§10](#10-cómo-se-comprueba-que-este-documento-no-miente))
-la deshace en un segundo.
+**Not five missing, three missing.** `sale (sold_at)` and `sale_item (product_id)` **already
+exist** from the initial migration, and so do the two integrity-unique ones. The earlier count
+treated them as pending; checking against `pg_indexes` ([§10](#10-how-this-document-is-checked-for-lying))
+resolves that in a second.
 
-| Índice | Sirve a | Estado | Nota |
+| Index | Serves | State | Note |
 |---|---|---|---|
-| `product (category_id, name)` **parcial sobre activos** | Q1 | **falta (T-13)** | Sustituye a `IX_product_category_id` e `IX_product_name`, que hoy existen sueltos: **se sustituyen, no se suman**. El predicado sale gratis en vez de costar un filtro. Depende de T-09, que crea la columna de baja |
-| `product (name)` con trigramas, **parcial sobre activos** | Q1 | **falta (T-13)** | **Ningún árbol B sirve un comodín a la izquierda.** Es el único índice cuyo valor depende del volumen: **el primero que se cae** si se objeta la extensión |
-| `sale_item (sale_id, product_id)` **único, incluyendo cantidad e importe** | Unicidad, Q6, **Q9** | **falta (T-13)** | Con las dos columnas incluidas, **la agregación del reporte no toca la tabla**. Es la única optimización deliberada del diseño. **Exige antes `sale_id NOT NULL`** ([§4](#4-restricciones-e-índices-dónde-vive-cada-regla)): con nulos, la unicidad no protege nada |
-| `sale (sold_at)` | Q7, Q9 | **ya existe** — `IX_sale_sold_at`, ascendente | **Y está bien así.** Ver la nota sobre el `DESC` justo debajo |
-| `sale_item (product_id)` | Q9 y la verificación de FK-3 | **ya existe** — `IX_sale_item_product_id` | El motor indexa el lado referenciado, **nunca el referenciante**. Hoy protege una consulta; el día que exista FK-3, también protege su verificación |
-| `category (name)` único · `user (username)` único | Integridad primero, Q4 y Q10 después | **ya existen** — `IX_category_name`, `IX_user_username` | Índices únicos, no restricciones: por eso no salen en `pg_constraint` |
-| `sale_item (sale_id)` suelta | — | **existe y sobra** — `IX_sale_item_sale_id` | **Se borra en la misma migración que crea el compuesto único**, que la deja redundante. Borrarla es parte de T-13, no un paso opcional |
+| `product (category_id, name)` **partial over active** | Q1 | **missing (T-13)** | Replaces `IX_product_category_id` and `IX_product_name`, which exist loose today: **they're replaced, not added to**. The predicate comes free instead of costing a filter. Depends on T-09, which creates the soft-delete column |
+| `product (name)` with trigrams, **partial over active** | Q1 | **missing (T-13)** | **No B-tree serves a leading wildcard.** It's the only index whose value depends on volume: **the first to go** if the extension is objected to |
+| `sale_item (sale_id, product_id)` **unique, including quantity and amount** | Uniqueness, Q6, **Q9** | **missing (T-13)** | With the two columns included, **the report's aggregation never touches the table**. It's the only deliberate optimization in the design. **Requires `sale_id NOT NULL` first** ([§4](#4-constraints-and-indexes-where-each-rule-lives)): with nulls, uniqueness protects nothing |
+| `sale (sold_at)` | Q7, Q9 | **already exists** — `IX_sale_sold_at`, ascending | **And it's fine as is.** See the note on `DESC` right below |
+| `sale_item (product_id)` | Q9 and FK-3's check | **already exists** — `IX_sale_item_product_id` | The engine indexes the referenced side, **never the referencing one**. Today it protects a query; the day FK-3 exists, it also protects its check |
+| `category (name)` unique · `user (username)` unique | Integrity first, then Q4 and Q10 | **already exist** — `IX_category_name`, `IX_user_username` | Unique indexes, not constraints: that's why they don't show up in `pg_constraint` |
+| `sale_item (sale_id)` loose | — | **exists and is redundant** — `IX_sale_item_sale_id` | **Dropped in the same migration that creates the unique composite**, which leaves it redundant. Dropping it is part of T-13, not an optional step |
 
-**Sobre el `DESC` de `sale (sold_at)`: era cosmético, y conviene saber por qué.** En un índice de
-**una sola columna** el sentido de ordenación no cambia nada: Postgres recorre cualquier árbol B
-hacia atrás sin coste añadido, así que `IX_sale_sold_at` ascendente sirve `ORDER BY sold_at DESC`
-igual de bien. El `DESC` solo se justificaría en un índice **compuesto**, donde los sentidos tienen
-que coincidir con los del `ORDER BY` para evitar una ordenación. **No se toca el índice existente**,
-y esta nota se queda para que nadie lo "arregle" más adelante.
+**On the `DESC` of `sale (sold_at)`: it was cosmetic, and it's worth knowing why.** In a
+**single-column** index the sort direction changes nothing: Postgres can scan any B-tree backward
+at no extra cost, so an ascending `IX_sale_sold_at` serves `ORDER BY sold_at DESC` just as well.
+`DESC` would only be justified on a **composite** index, where directions must match the
+`ORDER BY`'s to avoid a sort. **The existing index isn't touched**, and this note stays so nobody
+"fixes" it later.
 
-**Quién instala `pg_trgm`.** La extensión **no está instalada**: `SELECT extname FROM pg_extension`
-devuelve solo `plpgsql` ([§10](#10-cómo-se-comprueba-que-este-documento-no-miente)). La instala **la
-propia migración de EF que crea el índice de trigramas**, en la misma migración y no en otra: si el
-`CREATE EXTENSION` y el `CREATE INDEX` se separan, existe un estado intermedio en el que la
-migración del índice falla. **No puede ir en `db/init/` ni en ninguna otra pieza de infraestructura,
-porque ADR-001 reserva todo el DDL a las migraciones** — el repositorio de infraestructura levanta
-el motor, no define el esquema. Es viable sin superusuario: `pg_trgm` es una extensión *trusted* en
-Postgres 16, así que el propietario de la base puede instalarla. **T-13 debe decirlo.**
+**Who installs `pg_trgm`.** The extension **is not installed**: `SELECT extname FROM pg_extension`
+returns only `plpgsql` ([§10](#10-how-this-document-is-checked-for-lying)). It's installed by
+**the same EF migration that creates the trigram index**, in the same migration and no other: if
+the `CREATE EXTENSION` and the `CREATE INDEX` are split apart, there's an intermediate state where
+the index migration fails. **It can't go in `db/init/` or any other infrastructure piece, because
+ADR-001 reserves all DDL to the migrations** — the infrastructure repository brings up the engine,
+it doesn't define the schema. It's feasible without superuser: `pg_trgm` is a *trusted* extension
+in Postgres 16, so the database owner can install it. **T-13 must say so.**
 
-### 6.3 Índices descartados, y por qué
+### 6.3 Indexes considered and rejected, and why
 
-| Columna | Por qué **no** |
+| Column | Why **not** |
 |---|---|
-| `deleted_at` suelta (pendiente T-09) | Dos estados efectivos y casi todas las filas en uno. Su lugar es **dentro** del predicado parcial, que es donde aporta |
-| `user.role` | Enumeración de dos valores sobre una tabla de operadores internos. Ningún patrón filtra por rol |
-| `product.stock` | **Ningún patrón filtra ni ordena por stock.** Se lee siempre por identificador |
-| `sale.sold_by_user_id` (pendiente, T-12) | Ningún patrón lo usa. Y la consulta que lo justificaría —ventas por operador— **cruza datos personales**: no se preconstruye el índice de una consulta que el negocio ya decidió no hacer (**DP-02**) |
-| `sale_item (sale_id)` suelta | **Redundante:** ya es la columna principal del índice único. Con el matiz de que **hoy existe** y hay que **borrarla** en la migración que cree el compuesto, no solo evitar crearla |
-| `product.image_key` | Nunca aparece en un filtro. Es una clave opaca que solo se lee para resolver una dirección |
-| `user.password_hash` | **Nunca se indexa, y no es una cuestión de rendimiento** ([§7](#7-privacidad-y-retención)) |
+| `deleted_at` loose (pending T-09) | Two effective states with almost all rows in one. Its place is **inside** the partial predicate, which is where it earns its keep |
+| `user.role` | Two-value enum over a table of internal operators. No pattern filters by role |
+| `product.stock` | **No pattern filters or orders by stock.** It's always read by ID |
+| `sale.sold_by_user_id` (pending, T-12) | No pattern uses it. And the query that would justify it —sales by operator— **crosses personal data**: the index isn't pre-built for a query the business already decided not to run (**DP-02**) |
+| `sale_item (sale_id)` loose | **Redundant:** it's already the leading column of the unique index. With the nuance that **it exists today** and must be **dropped** in the migration that creates the composite, not just avoided going forward |
+| `product.image_key` | Never appears in a filter. It's an opaque key only read to resolve an address |
+| `user.password_hash` | **Never indexed, and it's not a performance matter** ([§7](#7-privacy-and-retention)) |
 
-**Salvedad honesta sobre las columnas incluidas.** El recorrido solo-índice exige que el mapa de
-visibilidad esté al día. En una tabla que **solo recibe inserciones**, el mantenimiento automático
-se dispara poco, así que las filas recién insertadas **sí** provocan lectura de la tabla hasta el
-siguiente barrido. La mitigación es operativa, no de diseño.
+**Honest caveat about included columns.** Index-only scans require the visibility map to be
+current. On a table that **only receives inserts**, automatic maintenance fires rarely, so
+recently inserted rows **do** cause a table read until the next sweep. The mitigation is
+operational, not a design one.
 
 ---
 
-## 7. Privacidad y retención
+## 7. Privacy and retention
 
-> Se clasifica **atributo por atributo**, no por tabla. Un "esta tabla tiene datos personales" no
-> dice qué se puede registrar en un log ni qué puede salir en una respuesta.
+> Classified **attribute by attribute**, not by table. "This table has personal data" doesn't say
+> what can go in a log or what can appear in a response.
 
-| Tabla | Atributo | Clasificación | Manejo exigido | Retención |
+| Table | Attribute | Classification | Required handling | Retention |
 |---|---|---|---|---|
-| `user` | `id` | No sensible | Identificador opaco | Indefinida |
-| `user` | `username` | **Dato personal — identifica a una persona** | Acceso restringido. Admisible en auditoría; **no** en respuestas anónimas ni en endpoints públicos | Indefinida, sin borrado |
-| `user` | `password_hash` | **Secreto de autenticación** (no es dato personal, y exige más) | **Jamás** en logs, respuestas, proyecciones ni mensajes de error. **Nunca se indexa.** Su única lectura legítima es verificar, a través del puerto de hash | Sin histórico ni versionado |
-| `user` | `role` | Confidencial interno | Revela el nivel de privilegio. No es personal, pero no es público | Indefinida |
-| `sale` | `sold_by` → `sold_by_username` (**T-12**) | **Dato personal** | Aparece en comprobantes. Acceso restringido | **Indefinida. Nunca se borra ni se edita** |
-| `sale` | `sold_by_user_id` — **no existe todavía (T-12)** | **Dato personal indirecto** | Identifica a la persona operadora por referencia | Indefinida |
-| `sale` | `id`, `sold_at` | No sensible | — | Indefinida |
-| `sale_item` | todos | No sensible | Datos comerciales, no personales | Indefinida, con su venta |
-| `product` | todos | No sensible | `name`, `price`, `stock`, `category_id`, `image_key` — sin restricción de privacidad | **Baja lógica, nunca borrado físico** |
-| `category` | todos | Público | — | Sin borrado |
+| `user` | `id` | Not sensitive | Opaque identifier | Indefinite |
+| `user` | `username` | **Personal data — identifies a person** | Restricted access. Admissible in audit; **not** in anonymous responses or public endpoints | Indefinite, no deletion |
+| `user` | `password_hash` | **Authentication secret** (not personal data, and demands more) | **Never** in logs, responses, projections or error messages. **Never indexed.** Its only legitimate read is verification, through the hashing port | No history or versioning |
+| `user` | `role` | Internal confidential | Reveals privilege level. Not personal, but not public | Indefinite |
+| `sale` | `sold_by` → `sold_by_username` (**T-12**) | **Personal data** | Appears on receipts. Restricted access | **Indefinite. Never deleted or edited** |
+| `sale` | `sold_by_user_id` — **doesn't exist yet (T-12)** | **Indirect personal data** | Identifies the operator by reference | Indefinite |
+| `sale` | `id`, `sold_at` | Not sensitive | — | Indefinite |
+| `sale_item` | all | Not sensitive | Commercial data, not personal | Indefinite, with its sale |
+| `product` | all | Not sensitive | `name`, `price`, `stock`, `category_id`, `image_key` — no privacy restriction | **Soft delete, never physical delete** |
+| `category` | all | Public | — | No deletion |
 
-**La clasificación no depende del nombre de la columna.** `sold_by` hoy y `sold_by_username` después
-de T-12 son **el mismo dato personal**, antes y después del renombrado.
+**Classification doesn't depend on the column name.** `sold_by` today and `sold_by_username` after
+T-12 are **the same personal datum**, before and after the rename.
 
-**Categorías regulatorias que no aplican, y por qué.** No hay pagos ni tarjetas, así que nada de
-normativa de medios de pago; no hay datos de salud. Y **no existe dato personal de cliente final**:
-la venta registra al **operador interno**, no al comprador. La superficie de privacidad es
-deliberadamente pequeña, y conviene no ampliarla sin requisito.
+**Regulatory categories that don't apply, and why.** There are no payments or cards, so no payment
+regulations apply; there's no health data. And **there's no end-customer personal data**: the sale
+records the **internal operator**, not the buyer. The privacy surface is deliberately small, and
+it's worth not expanding it without a requirement.
 
-### 7.1 Retención
+### 7.1 Retention
 
-| Qué | Política | Por qué |
+| What | Policy | Why |
 |---|---|---|
-| Ventas y sus líneas | **Nunca se borran ni se editan.** Retención indefinida | Registro contable. No existe operación que lo permita |
-| Productos | **Baja lógica. Nunca borrado físico** (pendiente T-09) | La línea de venta y el reporte dependen de la fila |
-| Categorías y usuarios | Sin borrado | No hay puerto que lo haga. Si se añade para usuarios, debe ser restrictivo (FK-4): la autoría de una venta no puede quedar huérfana |
-| **Binario de imagen** | **Se elimina** al reemplazar la imagen o al dar de baja el producto | Es el **único dato del sistema que sí se borra físicamente** (D-08) |
-| Hash de contraseña | No se versiona ni se guarda histórico | Conservarlos amplía la superficie sin requisito que lo justifique |
+| Sales and their lines | **Never deleted or edited.** Indefinite retention | Accounting record. No operation allows it |
+| Products | **Soft delete. Never physical delete** (pending T-09) | The sale line and the report depend on the row |
+| Categories and users | No deletion | No port does it. If added for users, it must be restrictive (FK-4): a sale's authorship can't be left orphaned |
+| **Image binary** | **Deleted** when the image is replaced or the product is soft-deleted | The **only system data that is actually physically deleted** (D-08) |
+| Password hash | Not versioned or kept as history | Keeping them would widen the attack surface with no requirement justifying it |
 
-**Orden obligatorio al borrar un binario, y por qué no se promete atomicidad.** Primero se anula
-`image_key` y se confirma la transacción; **después** se borra el binario. Un binario huérfano es
-inofensivo; una clave que apunta a un binario borrado es una imagen rota permanente. El
-almacenamiento no participa en la transacción de la base, así que *"en la misma transacción"* no es
-alcanzable y **no se promete** — el documento recuperado sí lo prometía, y era falso.
+**Mandatory order when deleting a binary, and why atomicity isn't promised.** First `image_key` is
+nulled and the transaction commits; **after that**, the binary is deleted. An orphaned binary is
+harmless; a key pointing to a deleted binary is a permanently broken image. Storage doesn't
+participate in the database transaction, so *"in the same transaction"* is not achievable and
+**is not promised** — the recovered document did promise it, and it was false.
 
-**Anonimización para analítica: no definida, y es una omisión consciente.** No hay analítica externa
-ni exportación, y el reporte **no expone datos personales**: agrega por producto, no por operador.
-**DP-02 lo cierra**: el reporte no se desglosa por vendedor.
-
----
-
-## 8. Auditoría `created_at` / `updated_at`
-
-**Decisión: el proyecto NO lleva columnas de auditoría. La pregunta queda cerrada, no abierta.**
-
-El documento recuperado las proponía en `category`, `product` y `user`, escritas por el motor con
-`DEFAULT now()` y un disparador `BEFORE UPDATE`. **No existen en el sistema construido y no se
-añaden.** Cuatro motivos, en orden de peso:
-
-1. **No hay requisito.** El enunciado no pide trazabilidad de cambios del catálogo. Añadir seis
-   columnas y un disparador para nadie es alcance inventado, que es exactamente lo que este
-   entregable viene a evitar (**DP-03** aplica el mismo criterio a los atributos del producto).
-2. **Contradice la regla de que no hay defectos en el motor.** [§3](#3-modelo-físico--las-21-columnas)
-   dice, y verifica, que **ninguna columna tiene `DEFAULT`**: los valores los pone el dominio. Un
-   `DEFAULT now()` sería la primera excepción, y una segunda fuente de verdad que ninguna prueba
-   cubre. El disparador `BEFORE UPDATE` sería, además, **la única lógica del sistema escondida en la
-   base**.
-3. **Ningún puerto podría leerlas.** El dominio no las expondría —ese es justo el punto de
-   resolverlas con propiedades sombra—, así que ninguna consulta expresable hoy podría ordenar ni
-   filtrar por ellas. Serían columnas forenses, no funcionales: su único uso sería mirar la tabla
-   con `psql`.
-4. **Los dos instantes que el negocio sí necesita ya tienen columna, y no son estos.** `sale.sold_at`
-   es el instante de la venta —el único instante de negocio del sistema— y `product.deleted_at`
-   (T-09) es la única transición de estado que hace falta rastrear. Un `created_at` en `sale`
-   sería un duplicado de `sold_at` con otro nombre.
-
-**Dueño de la reapertura y condición.** Si aparece un requisito real de auditoría —una pregunta del
-tipo *"¿quién cambió este precio y cuándo?"*— **la decisión vuelve al propietario**, y no se resuelve
-con dos columnas: un `updated_at` dice *cuándo* pero no *qué* ni *quién*, que es lo que esa pregunta
-pide de verdad. La respuesta entonces es una bitácora de cambios, y es una decisión de alcance, no
-de esquema. **Hasta que esa pregunta se formule, el sistema no lleva columnas de auditoría.**
+**Anonymization for analytics: not defined, and it's a conscious omission.** There's no external
+analytics or export, and the report **doesn't expose personal data**: it aggregates by product,
+not by operator. **DP-02 closes this**: the report isn't broken down by seller.
 
 ---
 
-## 9. Estrategia de semilla
+## 8. Audit `created_at` / `updated_at`
 
-Dos fronteras distintas, y conviene no mezclarlas: **las categorías las siembra la base; el
-administrador inicial no.**
+**Decision: the project does NOT carry audit columns. The question is closed, not open.**
 
-### 9.1 Las cinco categorías van en la migración inicial
+The recovered document proposed them on `category`, `product` and `user`, written by the engine
+with `DEFAULT now()` and a `BEFORE UPDATE` trigger. **They don't exist in the built system and
+aren't added.** Four reasons, in order of weight:
 
-**No son datos de ejemplo: son una dependencia funcional dura.** El repositorio de categorías es de
-solo lectura y la categoría del producto es obligatoria (FK-1), así que **sin categorías sembradas
-no se puede crear ni un producto** y el CRUD del enunciado no se podría ejercer.
+1. **There's no requirement.** The statement doesn't ask for catalog change tracking. Adding six
+   columns and a trigger for nobody is invented scope, which is exactly what this deliverable
+   exists to avoid (**DP-03** applies the same criterion to product attributes).
+2. **It contradicts the rule that the engine has no defaults.** [§3](#3-physical-model--the-22-columns)
+   states, and verifies, that **no column has a `DEFAULT`**: values are set by the domain. A
+   `DEFAULT now()` would be the first exception, and a second source of truth no test covers. The
+   `BEFORE UPDATE` trigger would also be **the only system logic hidden in the database**.
+3. **No port could read them.** The domain wouldn't expose them —that's exactly the point of
+   resolving them with shadow properties—, so no query expressible today could sort or filter by
+   them. They'd be forensic columns, not functional ones: their only use would be looking at the
+   table with `psql`.
+4. **The two instants the business actually needs already have a column, and these aren't them.**
+   `sale.sold_at` is the moment of the sale —the system's only business instant— and
+   `product.deleted_at` (T-09) is the only state transition worth tracking. A `created_at` on
+   `sale` would be a duplicate of `sold_at` under another name.
 
-Van en `InitialSchema` con **identificadores fijos y literales**, para que las pruebas y las
-verificaciones manuales puedan referenciarlas sin consultarlas antes:
+**Owner of the reopening, and condition.** If a real audit requirement appears —a question like
+*"who changed this price and when?"*— **the decision returns to the owner**, and it's not solved
+with two columns: an `updated_at` says *when* but not *what* or *who*, which is what that question
+actually asks. The answer then is a change log, and it's a scope decision, not a schema one.
+**Until that question is asked, the system carries no audit columns.**
+
+---
+
+## 9. Seed strategy
+
+Two distinct boundaries, worth not mixing up: **the database seeds the categories; it does not
+seed the initial administrator.**
+
+### 9.1 The five categories go in the initial migration
+
+**Not sample data: a hard functional dependency.** The category repository is read-only and a
+product's category is required (FK-1), so **without seeded categories not even a product can be
+created**, and the statement's CRUD couldn't be exercised.
+
+They go in `InitialSchema` with **fixed, literal identifiers**, so tests and manual checks can
+reference them without querying first:
 
 | `id` | `name` |
 |---|---|
 | `11111111-1111-4111-8111-111111111111` | General |
-| `22222222-2222-4222-8222-222222222222` | Herramientas |
-| `33333333-3333-4333-8333-333333333333` | Electricidad |
-| `44444444-4444-4444-8444-444444444444` | Fontanería |
-| `55555555-5555-4555-8555-555555555555` | Pinturas |
+| `22222222-2222-4222-8222-222222222222` | Tools |
+| `33333333-3333-4333-8333-333333333333` | Electrical |
+| `44444444-4444-4444-8444-444444444444` | Plumbing |
+| `55555555-5555-4555-8555-555555555555` | Paints |
 
-Los literales respetan la forma de un UUID versión 4 (dígito `4` en el tercer grupo, variante `8` en
-el cuarto) para que ninguna biblioteca los rechace al analizarlos.
+The literals respect the shape of a version-4 UUID (digit `4` in the third group, variant `8` in
+the fourth) so no library rejects them when parsing.
 
-### 9.2 El administrador inicial **no** lo siembra la base
+### 9.2 The initial administrator is **not** seeded by the database
 
-Su `password_hash` solo puede producirlo el puerto de hash, que es **código de aplicación**.
-Sembrarlo desde SQL exigiría una de dos cosas, y las dos son malas:
+Their `password_hash` can only be produced by the hashing port, which is **application code**.
+Seeding it from SQL would require one of two things, and both are bad:
 
-1. **Reimplementar el algoritmo de hash en SQL** — una segunda implementación de una primitiva de
-   seguridad, que puede divergir de la primera sin que nadie lo note.
-2. **Incrustar un hash literal precalculado** — ata la semilla al algoritmo elegido y convierte una
-   credencial en un valor versionado en el repositorio, contra el artículo IX.
+1. **Reimplementing the hashing algorithm in SQL** — a second implementation of a security
+   primitive, which can drift from the first without anyone noticing.
+2. **Embedding a precomputed literal hash** — ties the seed to the chosen algorithm and turns a
+   credential into a value versioned in the repository, against article IX.
 
-**Lo crea el arranque de la aplicación, con credenciales de entorno** (D-09, D-10). Hoy la tabla
-`user` tiene exactamente **una fila**, creada por esa ruta.
+**The application's startup creates it, with environment credentials** (D-09, D-10). Today the
+`user` table has exactly **one row**, created that way.
 
-**Hasta dónde llega el contrato de la base, dicho sin adornos.** La base garantiza que el nombre de
-usuario sea **único** y **no nulo**, y nada más: que esté en minúsculas y que el rol pertenezca al
-conjunto cerrado son hoy **solo dominio** ([§4](#4-restricciones-e-índices-dónde-vive-cada-regla)),
-y los baja T-20. **La base no garantiza hoy que un rol sea válido.**
+**How far the database's contract goes, stated plainly.** The database guarantees the username is
+**unique** and **non-null**, and nothing else: that it's lowercase and that the role belongs to the
+closed set are today **domain only** ([§4](#4-constraints-and-indexes-where-each-rule-lives)), and
+T-20 lowers them. **The database does not today guarantee a role is valid.**
 
-**Y no garantiza en ningún caso quién tiene derecho a otorgar el rol `admin`.** Eso es política de
-autorización, vive en la API y **hoy está rota**: el alta de usuarios es anónima (defecto A-1). No
-es un asunto del modelo de datos, pero se nombra aquí porque §9.2 es donde alguien iría a buscarlo.
+**And it never guarantees who has the right to grant the `admin` role.** That's authorization
+policy, it lives in the API, and **it's broken today**: user signup is anonymous (defect A-1). It's
+not a data-model matter, but it's named here because §9.2 is where someone would go looking for it.
 
 ---
 
-## 10. Cómo se comprueba que este documento no miente
+## 10. How this document is checked for lying
 
-Sin esto, en dos semanas vuelve a mentir. **Estas tres consultas son las que produjeron las tablas
-de §3, §4 y §6.2**, y cualquiera puede repetirlas:
+Without this, in two weeks it lies again. **These three queries are what produced the tables in
+§3, §4 and §6.2**, and anyone can repeat them:
 
 ```bash
 cd simple-stock-flow-infra && docker compose exec -T db psql -U simple_stock_flow -d simple_stock_flow
 ```
 
-**Cómo se lee el resultado.** Si la primera consulta devuelve una columna que no está en §3, o la
-segunda devuelve más o menos de ocho filas, **el documento está roto y se corrige el documento**
-—artículo X: gana el motor—. Si alguna regla marcada ***solo dominio*** aparece en el motor, es que
-ya se bajó y hay que reclasificarla; si alguna marcada ***motor*** no aparece, alguien la borró.
+**How to read the result.** If the first query returns a column not in §3, or the second returns
+more or fewer than eight rows, **the document is broken and the document gets fixed** —article X:
+the engine wins—. If a rule marked ***domain only*** appears in the engine, it's already been
+lowered and needs reclassifying; if one marked ***engine*** doesn't appear, someone deleted it.
 
-**Sobre qué esquema está pegada esta salida.** Sobre el **ya renombrado a singular**
-([§0](#0-convención-de-nombres-del-esquema)), con `20260919215344_RenameTablesToSingular` aplicada
-([§3.2](#32-migraciones-aplicadas)). Si estas consultas devolvieran los nombres en plural
-—`products`, `PK_sales`, `ck_products_stock_non_negative`—, lo que faltaría sería aplicar esa
-migración. **El renombrado no cambia ni una cuenta**: siguen siendo 22 columnas, 8 restricciones y
-12 índices, con los mismos tipos y la misma nulabilidad. Lo único que cambia son los nombres —y, en
-§10.1 y §10.3, el orden alfabético que arrastran: `sale` pasa a ordenarse **antes** que
-`sale_item`—.
+**What schema this output is attached to.** The **already-renamed-to-singular** one
+([§0](#0-schema-naming-convention)), with `20260919215344_RenameTablesToSingular` applied
+([§3.2](#32-applied-migrations)). If these queries returned plural names
+—`products`, `PK_sales`, `ck_products_stock_non_negative`—, what would be missing is applying
+that migration. **The rename doesn't change a single count**: it's still 22 columns, 8 constraints
+and 12 indexes, with the same types and the same nullability. The only thing that changes is the
+names —and, in §10.1 and §10.3, the alphabetical order that comes with them: `sale` now sorts
+**before** `sale_item`—.
 
-### 10.1 Columnas, tipos, nulabilidad y defectos — debe devolver **21 filas** y **ningún defecto**
+### 10.1 Columns, types, nullability and defaults — must return **21 rows** and **no defaults**
 
 ```sql
 SELECT table_name AS tabla, ordinal_position AS n, column_name AS columna,
@@ -647,7 +649,7 @@ WHERE table_schema = 'sales'
 ORDER BY table_name, ordinal_position;
 ```
 
-Ejecutada el **2026-09-19**:
+Run on **2026-09-19**:
 
 ```text
    tabla   | n |    columna    |     tipo      | nulable | por_defecto
@@ -676,12 +678,12 @@ Ejecutada el **2026-09-19**:
 (21 rows)
 ```
 
-**Cuadra.** 21 filas, ningún defecto, ninguna columna `created_at` ni `updated_at`, ninguna columna
-de moneda, `sale_item.sale_id` nulable —el defecto declarado en §3— y `sale.sold_by` con su nombre
-actual. Las columnas marcadas **pendiente** (`product.deleted_at`, `sale.sold_by_user_id`,
-`sale_item.category_name`) **no aparecen, y es correcto que no aparezcan**.
+**It checks out.** 21 rows, no defaults, no `created_at` or `updated_at` column, no currency
+column, `sale_item.sale_id` nullable —the declared defect in §3— and `sale.sold_by` with its
+current name. The columns marked **pending** (`product.deleted_at`, `sale.sold_by_user_id`,
+`sale_item.category_name`) **don't appear, and that's correct**.
 
-### 10.2 Restricciones — debe devolver **8 filas**: 5 `PK`, 2 `FK` y 1 `CHECK`
+### 10.2 Constraints — must return **8 rows**: 5 `PK`, 2 `FK` and 1 `CHECK`
 
 ```sql
 SELECT c.conrelid::regclass AS tabla, c.conname AS restriccion,
@@ -695,7 +697,7 @@ WHERE n.nspname = 'sales'
 ORDER BY 1, 3, 2;
 ```
 
-Ejecutada el **2026-09-19**:
+Run on **2026-09-19**:
 
 ```text
       tabla      |           restriccion           | tipo  |                                 definicion
@@ -711,13 +713,13 @@ Ejecutada el **2026-09-19**:
 (8 rows)
 ```
 
-**Cuadra, y confirma tres cosas de golpe.** Están las 8 exactas. Las dos claves foráneas son FK-1 y
-FK-2 con las acciones que §5 declara, **sin cláusula `ON UPDATE`** —que es como Postgres representa
-`NO ACTION`—. Y **ninguna de las cinco reglas marcadas *solo dominio* aparece aquí**: no hay `CHECK`
-de `price > 0`, ni de `quantity > 0`, ni de `role`, ni de nombre no vacío, ni de minúsculas. La
-clasificación de §4 es correcta en las dos direcciones.
+**It checks out, and confirms three things at once.** The exact 8 are there. The two foreign keys
+are FK-1 and FK-2 with the actions §5 declares, **with no `ON UPDATE` clause** —which is how
+Postgres represents `NO ACTION`—. And **none of the five rules marked *domain only* appears here**:
+there's no `CHECK` for `price > 0`, nor `quantity > 0`, nor `role`, nor non-empty name, nor
+lowercase. §4's classification is correct in both directions.
 
-### 10.3 Índices y extensiones — las unicidades no salen arriba porque son índices
+### 10.3 Indexes and extensions — uniqueness doesn't show up above because they're indexes
 
 ```sql
 SELECT tablename AS tabla, indexname AS indice, indexdef AS definicion
@@ -726,7 +728,7 @@ FROM pg_indexes WHERE schemaname = 'sales' ORDER BY 1, 2;
 SELECT extname FROM pg_extension ORDER BY 1;
 ```
 
-Ejecutadas el **2026-09-19**:
+Run on **2026-09-19**:
 
 ```text
    tabla   |         indice          |                                     definicion
@@ -751,11 +753,12 @@ Ejecutadas el **2026-09-19**:
 (1 row)
 ```
 
-**Cuadra.** Doce índices: cinco de clave primaria, los dos únicos de integridad y **cinco de
-acceso**. Ninguno es parcial y ninguno usa trigramas, así que **los tres de §6.2 faltan de verdad**.
-`IX_sale_item_sale_id` existe y sobra. Y `pg_trgm` **no está instalada**: solo `plpgsql`.
+**It checks out.** Twelve indexes: five primary-key, the two integrity-unique ones, and **five
+access** ones. None is partial and none uses trigrams, so **the three from §6.2 are truly
+missing**. `IX_sale_item_sale_id` exists and is redundant. And `pg_trgm` **is not installed**: only
+`plpgsql`.
 
-### 10.4 Volumen actual, para que nadie confunda *vacío* con *roto*
+### 10.4 Current volume, so nobody mistakes *empty* for *broken*
 
 ```sql
 SELECT 'category' t, count(*) FROM sales.category
@@ -765,124 +768,123 @@ UNION ALL SELECT 'sale', count(*) FROM sales.sale
 UNION ALL SELECT 'sale_item', count(*) FROM sales.sale_item;
 ```
 
-`category` = **5** (la semilla de §9.1), `user` = **1** (el administrador del arranque, §9.2),
-y `product`, `sale` y `sale_item` = **0**. Esto es lo que hace que varias migraciones pendientes
-—`sale_id NOT NULL`, `category_name NOT NULL`, `sold_by_user_id NOT NULL`— sean **gratis hoy y
-caras mañana**: en cuanto exista la primera venta, cada una necesita un relleno.
+`category` = **5** (the seed from §9.1), `user` = **1** (the startup administrator, §9.2), and
+`product`, `sale` and `sale_item` = **0**. This is what makes several pending migrations
+—`sale_id NOT NULL`, `category_name NOT NULL`, `sold_by_user_id NOT NULL`— **free today and
+expensive tomorrow**: as soon as the first sale exists, each one needs a backfill.
 
 ---
 
-## 11. Huecos que quedan, con su dueño
+## 11. Remaining gaps, with their owner
 
-Todo lo marcado **pendiente** en este documento ya tiene tarea en [`tasks.md`](tasks.md) y no es un
-hueco: es trabajo planificado. Lo que sigue **no tiene respuesta en ninguna parte**.
+Everything marked **pending** in this document already has a task in [`tasks.md`](tasks.md) and
+isn't a gap: it's planned work. What follows **has no answer anywhere**.
 
-| # | Hueco | Por qué no lo resuelve este documento | Dueño |
+| # | Gap | Why this document doesn't resolve it | Owner |
 |---|---|---|---|
-| ~~H-1~~ | ~~**Qué `category_name` gana en el reporte cuando un producto se recategorizó dentro del rango.**~~ | **CERRADO el 2026-09-20 por decisión del propietario.** No gana ninguno: se **agrupa por el valor congelado**. Ver §11.1 | **Decidido** |
-| H-2 | **Política de retención del binario de imagen huérfano.** El orden de borrado de §7.1 admite dejar binarios sin referencia si falla el segundo paso. No hay proceso de limpieza | Es operativo, no de modelo. No hay nada que declarar en el esquema | **Propietario** · sin impacto en el entregable |
-| ~~H-3~~ | ~~**Quién puede otorgar el rol `admin`** (DP-04)~~ | **CERRADO el 2026-09-20.** DP-04 decidió que **nadie lo otorga en ejecución**: un administrador da de alta vendedores y el rol `admin` lo provisiona el despliegue desde el entorno. Estaba bloqueado por el defecto A-1 —que el alta fuera anónima—, cerrado antes. `user.role` sigue admitiendo los dos valores; lo que se cierra es **quién puede escribir cuál** | **Decidido** |
+| ~~H-1~~ | ~~**Which `category_name` wins in the report when a product was recategorized within the range.**~~ | **CLOSED on 2026-09-20 by owner decision.** Neither wins: it's **grouped by the frozen value**. See §11.1 | **Decided** |
+| H-2 | **Retention policy for orphaned image binaries.** The delete order in §7.1 allows binaries to be left unreferenced if the second step fails. There's no cleanup process | It's operational, not a model matter. Nothing to declare in the schema | **Owner** · no impact on the deliverable |
+| ~~H-3~~ | ~~**Who can grant the `admin` role** (DP-04)~~ | **CLOSED on 2026-09-20.** DP-04 decided that **nobody grants it at runtime**: an administrator onboards sellers and the `admin` role is provisioned by the deployment from the environment. It was blocked by defect A-1 —that signup was anonymous—, closed earlier. `user.role` still admits both values; what's closed is **who can write which** | **Decided** |
 
 
-### 11.1 · H-1, cerrado: el reporte agrupa **por** el valor congelado
+### 11.1 · H-1, closed: the report groups **by** the frozen value
 
-**Decisión del propietario, 2026-09-20.** Ante una recategorización dentro del rango, la consulta
-del reporte **no elige un ganador**: **agrupa por el `category_name` congelado**. Si una categoría
-se llamaba «Herramientas» en las ventas de septiembre y «Ferretería» en las de octubre, son **dos
-etiquetas distintas y el reporte muestra dos filas**.
+**Owner decision, 2026-09-20.** Faced with a recategorization within the range, the report query
+**doesn't pick a winner**: it **groups by the frozen `category_name`**. If a category was called
+"Tools" in September's sales and "Hardware" in October's, they're **two distinct labels and the
+report shows two rows**.
 
-**El razonamiento, en las palabras del propietario:** elegir «el más reciente del rango» reintroduce
-por la puerta de atrás justo lo que [ADR-004](adr/adr-004-reporte-agregado-y-congelado.md) existe
-para impedir. Si el reporte toma el más reciente, entonces **una venta nueva con la etiqueta nueva
-cambia lo que ya se había leído de ese rango**: el reporte deja de ser estable. Es reescribir un
-reporte cerrado, solo que leyendo la etiqueta de la venta más nueva en vez del catálogo vivo.
+**The reasoning, in the owner's words:** choosing "the most recent in the range" reintroduces, by
+the back door, exactly what [ADR-004](adr/adr-004-aggregate-frozen-report.md) exists to prevent. If
+the report takes the most recent, then **a new sale with the new label changes what had already
+been read for that range**: the report stops being stable. It's rewriting a closed report, only
+reading the label of the newest sale instead of the live catalog.
 
-**Colapsar dos etiquetas en una exige decidir que son la misma cosa, y esa decisión no le toca al
-reporte: le tocaba a quien renombró.** El criterio que gobierna, y que decide solo: *un reporte
-cerrado no debe cambiar nunca*.
+**Collapsing two labels into one requires deciding they're the same thing, and that decision isn't
+the report's to make: it belonged to whoever did the renaming.** The governing criterion, which
+decides on its own: *a closed report must never change*.
 
-**Dos consecuencias que hay que mirar de frente:**
+**Two consequences that have to be faced head-on:**
 
-1. **`spec.md` CA-06.1 dice «una fila por producto» y esta decisión produce más de una** cuando hubo
-   recategorización. El criterio está redactado para el caso sin renombrados. Hay que reescribirlo
-   —«una fila por producto y etiqueta congelada»— o las dos afirmaciones firmadas se contradicen.
-   **Decisión pendiente del propietario**, porque toca un documento firmado.
-2. **T-11 hereda el `GROUP BY`, no una función de ventana.** La consulta agrupa por
-   `product_id, product_name, category_name`; no hay desempate que escribir. Sale más simple que la
-   alternativa que se descartó.
+1. **`spec.md` CA-06.1 says "one row per product" and this decision produces more than one** when
+   there was a recategorization. The criterion was written for the no-renaming case. It needs
+   rewriting —"one row per product and frozen label"— or the two signed statements contradict each
+   other. **Decision pending from the owner**, because it touches a signed document.
+2. **T-11 inherits the `GROUP BY`, not a window function.** The query groups by
+   `product_id, product_name, category_name`; there's no tiebreak to write. It comes out simpler
+   than the alternative that was rejected.
 
-**Y esta decisión deja a DP-01 en evidencia:** el nombre de producto usa hoy el desempate que aquí
-se rechaza, y el defecto está **medido**, no supuesto — defecto **A-7** de
-[`../traspaso/HANDOFF-TECNICO.md`](../traspaso/HANDOFF-TECNICO.md) §6.1. Por instrucción del propietario **no se corrige
-en esta tanda**: se reporta.
+**And this decision exposes DP-01:** the product name today uses the tiebreak rejected here, and
+the defect is **measured**, not assumed — defect **A-7** in
+[`../handoff/HANDOFF-TECNICO.md`](../handoff/HANDOFF-TECNICO.md) §6.1. By owner instruction **it is
+not fixed in this batch**: it is reported.
 
 ---
 
-## 12. Bloque de firma
+## 12. Signature block
 
-**Qué se acepta al firmar este documento:**
+**What is accepted by signing this document:**
 
-- La **convención de nombres** de §0: las cinco tablas en **singular**, el esquema `sales` intacto, y
-  `user` sin entrecomillar porque el esquema cualifica.
-- El **glosario** de §1 como lenguaje único del proyecto.
-- Las **cinco entidades** de §2, con sus invariantes y el agregado que hace cumplir cada una.
-- El **modelo físico** de §3: 22 columnas con tipo, longitud, nulabilidad y ausencia de defectos.
-- La **clasificación de cada regla** en *motor* / *solo dominio* / *pendiente* de §4, incluida la
-  deuda explícita de T-20.
-- La **política de claves foráneas** de §5, con FK-3 y FK-4 declaradas pendientes en vez de
-  supuestas.
-- Los **patrones de acceso** de §6 y la cuenta corregida: **tres índices faltan, no cinco**.
-- La **clasificación de privacidad y retención** de §7, atributo por atributo.
-- La **decisión cerrada de §8**: el proyecto **no lleva** `created_at` / `updated_at`.
-- La **estrategia de semilla** de §9, con los cinco identificadores fijos.
+- The **naming convention** in §0: the five tables **singular**, the `sales` schema intact, and
+  `user` unquoted because the schema qualifies it.
+- The **glossary** in §1 as the project's single language.
+- The **five entities** in §2, with their invariants and the aggregate that enforces each.
+- The **physical model** in §3: 22 columns with type, length, nullability and no defaults.
+- The **classification of each rule** in §4 as *engine* / *domain only* / *pending*, including
+  T-20's explicit debt.
+- The **foreign key policy** in §5, with FK-3 and FK-4 declared pending rather than assumed.
+- The **access patterns** in §6 and the corrected count: **three indexes are missing, not five**.
+- The **privacy and retention classification** in §7, attribute by attribute.
+- The **decision closed in §8**: the project **does not carry** `created_at` / `updated_at`.
+- The **seed strategy** in §9, with the five fixed identifiers.
 
-**Contra qué se verificó:** PostgreSQL 16.14 en el contenedor `simple-stock-flow-db-1`, base
-`simple_stock_flow`, esquema `sales`, el **2026-09-19**, con las consultas de §10 y su salida literal
-pegada. El dominio se contrastó leyendo `src/domain/` de `simple-stock-flow-api`; el mapeo, leyendo
-`src/adapters/outbound/persistence/Configurations/`.
+**Verified against:** PostgreSQL 16.14 in the `simple-stock-flow-db-1` container, database
+`simple_stock_flow`, schema `sales`, on **2026-09-19**, with the queries from §10 and their literal
+output attached. The domain was checked by reading `src/domain/` in `simple-stock-flow-api`; the
+mapping, by reading `src/adapters/outbound/persistence/Configurations/`.
 
-**Qué queda explícitamente fuera:**
+**What is explicitly left out:**
 
-- **El contrato de la API.** Qué campos viajan, con qué nombres y qué forma tiene el cuerpo de error
-  vive en `api-contract.md`, no aquí. Este documento describe el almacenamiento.
-- **Los requisitos de negocio y sus criterios de aceptación**, que viven en [`spec.md`](spec.md).
-- **Las decisiones técnicas D-01…D-10 y la estrategia de pruebas**, que siguen en
+- **The API contract.** What fields travel, under what names, and the shape of the error body
+  live in `api-contract.md`, not here. This document describes storage.
+- **The business requirements and their acceptance criteria**, which live in [`spec.md`](spec.md).
+- **Technical decisions D-01…D-10 and the testing strategy**, which remain in
   [`plan.md`](plan.md).
-- **Todo lo listado en §11**, que son huecos con dueño, no omisiones.
-- **Cualquier atributo de producto más allá de nombre, precio, stock, categoría e imagen** (DP-03),
-  **cualquier columna de moneda** (D-05) y **cualquier desglose del reporte por vendedor** (DP-02).
-  Las tres están decididas y no se reabren.
+- **Everything listed in §11**, which are gaps with an owner, not omissions.
+- **Any product attribute beyond name, price, stock, category and image** (DP-03), **any currency
+  column** (D-05), and **any report breakdown by seller** (DP-02). All three are decided and not
+  reopened.
 
 
 ---
 
-## 13. Registro de deuda declarada
+## 13. Declared debt log
 
-**Medido el 2026-09-20 contra el motor.** Este apartado no corrige el documento: lo **declara**.
+**Measured on 2026-09-20 against the engine.** This section doesn't correct the document: it
+**declares it**.
 
-> **Una mentira declarada es deuda. Una mentira silenciosa es una trampa.** Este documento está
-> **firmado**, así que ningún agente cambia sus marcas por su cuenta. Lo que sigue es lo que un
-> lector necesita saber para no fiarse de ellas.
+> **A declared lie is debt. A silent lie is a trap.** This document is **signed**, so no agent
+> changes its marks on its own. What follows is what a reader needs to know not to trust them.
 
-**Tres familias declaradas, las tres saldadas el 2026-09-20.** El mismo día que las once del contrato de API. El texto
-se corrigió en su sitio y las marcas que avisaban al lector se retiraron, porque ya no hay de qué
-avisar. **Las entradas se quedan**: un registro que se borra al cumplirse pierde la memoria de que la
-mentira existió.
+**Three declared families, all three settled on 2026-09-20.** Same day as the API contract's
+eleven. The text was corrected in place and the marks warning the reader were removed, because
+there's nothing left to warn about. **The entries stay**: a record that gets erased once fulfilled
+loses the memory that the lie ever existed.
 
-> **Cómo se lee el estado.** **`Abierta`**: el texto sigue siendo falso y lleva marca `⚠ Deuda
-> declarada`. **`Saldada`**: el texto ya es correcto y la marca no debe estar. `verify.sh` §9
-> comprueba la correspondencia en los dos sentidos.
+> **How to read the status.** **`Open`**: the text is still false and carries the `⚠ Declared
+> debt` mark. **`Settled`**: the text is now correct and the mark should be absent. `verify.sh` §9
+> checks the correspondence in both directions.
 
-| # | Estado | Dónde lo dice | Qué afirma el documento | Qué mide el motor | Corrección propuesta |
+| # | Status | Where it's stated | What the document claims | What the engine measures | Proposed fix |
 |---|---|---|---|---|---|
-| **D-1** | Saldada el 2026-09-20 | §2 (invariantes de `Product`) y §3 (columna `deleted_at`) | La baja lógica es **pendiente (T-09)** | `sale_item` no, pero **`product.deleted_at` existe**: `timestamptz`, nulable, sin defecto, con filtro global. T-09 está hecha | Las dos marcas pasan a **motor**: la fila de la invariante en §2 y la columna `deleted_at` en §3, esta con la comprobación contra `information_schema` escrita al lado |
-| **D-2** | Saldada el 2026-09-20 | §2 (diagrama) y §4 (tres filas) | **Pendiente (T-20)**: `sale_item.sale_id NOT NULL`, el único `(sale_id, product_id)` y la clave foránea a `product` | Las tres **están en el motor**: las dos columnas son `NOT NULL`, el índice único lleva `INCLUDE (quantity, unit_price)`, y existe `FK_sale_item_product_product_id` con `RESTRICT` — la barrera en que ADR-003 se apoyaba | Las cinco marcas pasan a **motor**, y las filas de §4 dejan de tener un guion en la columna del nombre: llevan `IX_sale_item_sale_id_product_id` y `FK_sale_item_product_product_id`. El diagrama ya no dice «FK pendiente» |
-| **D-3** | Saldada el 2026-09-20 | §11, hueco H-3 | Quién otorga el rol `admin` **«no se puede ni plantear»** mientras el alta de usuarios sea anónima (defecto A-1) | **A-1 está cerrado**: sin token → 401, con `seller` → 403. El hueco está **desbloqueado**, no resuelto | H-3 queda **cerrado**, no solo desbloqueado: DP-04 decidió que nadie otorga el rol en ejecución |
+| **D-1** | Settled on 2026-09-20 | §2 (`Product` invariants) and §3 (`deleted_at` column) | Soft delete is **pending (T-09)** | `sale_item` isn't, but **`product.deleted_at` exists**: `timestamptz`, nullable, no default, with a global filter. T-09 is done | Both marks move to **engine**: the invariant row in §2 and the `deleted_at` column in §3, with the `information_schema` check written alongside |
+| **D-2** | Settled on 2026-09-20 | §2 (diagram) and §4 (three rows) | **Pending (T-20)**: `sale_item.sale_id NOT NULL`, the single `(sale_id, product_id)` index, and the foreign key to `product` | All three **are in the engine**: both columns are `NOT NULL`, the unique index carries `INCLUDE (quantity, unit_price)`, and `FK_sale_item_product_product_id` exists with `RESTRICT` — the barrier ADR-003 was relying on | All five marks move to **engine**, and §4's rows stop showing a dash in the name column: they carry `IX_sale_item_sale_id_product_id` and `FK_sale_item_product_product_id`. The diagram no longer says "FK pending" |
+| **D-3** | Settled on 2026-09-20 | §11, gap H-3 | Who grants the `admin` role **"can't even be asked"** while user signup is anonymous (defect A-1) | **A-1 is closed**: no token → 401, `seller` → 403. The gap is **unblocked**, not resolved | H-3 is now **closed**, not just unblocked: DP-04 decided nobody grants the role at runtime |
 
-**Lo que este registro NO hace.** No comprueba que estas tres sigan siendo todas: eso exige medir
-contra el motor. Lo que `verify.sh` §9 comprueba es que el registro **exista, esté completo y cuadre
-con las marcas** repartidas por el documento.
+**What this log does NOT do.** It doesn't check that these three are still all of them: that
+requires measuring against the engine. What `verify.sh` §9 checks is that the log **exists, is
+complete, and matches the marks** scattered through the document.
 
-**Lo que NO es deuda, y conviene no confundir:** `sold_by_user_id` sigue marcado **pendiente
-(T-12)** y eso **es cierto** — `sale.sold_by` es texto y no tiene clave foránea. Verificado el mismo
-día.
+**What is NOT debt, and it's worth not confusing:** `sold_by_user_id` is still marked **pending
+(T-12)** and that **is true** — `sale.sold_by` is text and has no foreign key. Verified the same
+day.
