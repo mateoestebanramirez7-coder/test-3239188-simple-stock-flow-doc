@@ -23,7 +23,7 @@
   - `price > 0` enforced by domain logic (`06-data/data-model.md §2.2`).
   - `stock >= 0` enforced at domain level and backed by database check constraint `ck_product_stock_non_negative` (`06-data/data-model.md §2.2`, `§4`).
   - Belongs to exactly one mandatory and existing category (`06-data/data-model.md §2.2`, `FK-1`).
-  - Soft deletion via `deleted_at` shadow property; physical deletion is prohibited (`06-data/data-model.md §2.2`, ADR-003). **Status: pending (T-09)** — the column does not exist in the engine yet; the database still allows physical deletion until this task lands (`06-data/data-model.md §3`, `§10.1`).
+  - Soft deletion via `deleted_at` shadow property; physical deletion is prohibited (`06-data/data-model.md §2.2`, ADR-003, `§13` debt log D-1 — settled in engine).
 
 ### 2. `Sale` (Aggregate Root)
 - **Invariants:**
@@ -43,12 +43,10 @@
 ## Domain Events
 - `StockWithdrawn`: Fired when units are decremented during sale creation (`06-data/data-model.md §2.3`).
 - `SaleConfirmed`: Fired upon successful persistence of an immutable sale aggregate (`06-data/data-model.md §2.3`).
-- `ProductSoftDeleted`: Fired when a product is marked as inactive (`06-data/data-model.md §2.2`, ADR-003). **Status: pending (T-09)** — depends on the `deleted_at` column, not yet in the engine (`06-data/data-model.md §3`, `§10.1`).
+- `ProductSoftDeleted`: Fired when a product is marked as inactive (`06-data/data-model.md §2.2`, ADR-003, `§13` D-1).
 
 ### Pending Rules (designed, not yet in the engine)
-The data model explicitly marks the following as **pending**, meaning the rule is decided but not enforced by Postgres today — a manual `INSERT`/`UPDATE` via `psql` would skip it silently:
-- `product.deleted_at` (soft delete) — **pending T-09** (`06-data/data-model.md §2.2`, `§3`, `§10.1`).
-- `sale_item.category_name` (frozen category label) — **pending T-11** (`06-data/data-model.md §2.4`, `§3`).
-- `sale.sold_by_user_id` (FK-4 to `user.id`) — **pending T-12** (`06-data/data-model.md §3`, `§5`, `§7`).
-
-These are included here because the domain/architecture already assume them, but per the model's own criterion (`06-data/data-model.md §10`), only what is verified against the engine counts as current state.
+The data model's debt log (`06-data/data-model.md §13`) explicitly distinguishes what is **settled in the engine** from what is still **pending**:
+- `product.deleted_at` (soft delete) and the `sale_item` uniqueness/FK trio from T-20 are **settled in the engine** as of the model's 2026-09-20 update (`06-data/data-model.md §13`, D-1, D-2) — not pending, despite being marked that way earlier in the same document (§3, §10), which the debt log supersedes.
+- `sale_item.category_name` (frozen category label on the sale line) remains **pending (T-11)**: `product.category_name` exists in the engine, but the separate `sale_item.category_name` column — the one that actually freezes the label at the moment of sale — does not (`06-data/data-model.md §3`, `§13`).
+- `sale.sold_by_user_id` (FK-4 to `user.id`) remains **pending (T-12)**, confirmed as still-open debt in the model's own closing note (`06-data/data-model.md §13`).
