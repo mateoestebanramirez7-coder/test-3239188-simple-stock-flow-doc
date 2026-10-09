@@ -20,4 +20,4 @@
 - **Multi-Currency Support:** The system operates under a single-currency architecture by design (`06-data/data-model.md §1`, D-05).
 - **Electronic Invoicing or Payments:** Integrations with tax authorities, POS printing, or external payment gateways are excluded `[Assumption]`.
 - **Dynamic Category Management:** Categories are static and read-only; no CRUD endpoints exist for category maintenance (`06-data/data-model.md §2.1`).
-- **Generic Audit Columns:** Catalog entities do not contain generic `created_at` or `updated_at` columns (`06-data/data-model.md §8`).
+- **Generic Audit Columns:** Catalog entities do not contain generic `created_at` or `updated_at` columns (`06-data/data-model.md §8`)..
