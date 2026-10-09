@@ -1,58 +1,56 @@
 # test-3239188-simple-stock-flow-doc
 
-> **Reto SDD · Ficha ADSO 3239188**
-> Entrega: **hoy 8 de octubre de 2026, a las 10:50 p. m. (hora Colombia)**. Cuenta regresiva: https://claude.ai/artifact/3ja3TMwGnprBV6QCcyAruT
+> **SDD Challenge · ADSO Class 3239188**
+> Delivery: **today, October 8, 2026, at 10:50 PM (Colombia Time)**. Countdown: https://claude.ai/artifact/3ja3TMwGnprBV6QCcyAruT
 
-Este reto **no se hace en el repositorio principal de su proyecto**. Se hace en un **fork de este repositorio**.
+This challenge **is not performed in your project's main repository**. It is done in a **fork of this repository**.
 
-## Qué hay que hacer
+## What to do
 
-El único insumo es el modelo de datos de *Simple Stock Flow*: [`spec/data-model.md`](spec/data-model.md).
-A partir de él se reconstruye la documentación del sistema **hacia atrás**, de la arquitectura al contexto:
+The only input is the *Simple Stock Flow* data model: [`spec/data-model.md`](spec/data-model.md).
+From it, the system documentation is reconstructed **backwards**, from architecture to context:
 
-| Orden | Carpeta | Qué se produce a partir del modelo de datos |
+| Order | Directory | What is produced from the data model |
 |---|---|---|
-| 1 | `05-architecture/` | Estilo y piezas del sistema que el modelo implica (agregados, puertos, dónde vive cada regla) |
-| 2 | `04-requirements/` | Historias de usuario y requisitos no funcionales que el modelo hace necesarios |
-| 3 | `03-product/` | Problema que resuelve y visión del producto |
-| 4 | `02-domain/` | Entidades, reglas y eventos del dominio, con su glosario |
-| 5 | `01-context/` | Descripción general y alcance (qué se construye y qué no) |
-| 6 | `05-architecture/` (cierre) | Volver a la arquitectura y comprobar que cuadra con todo lo anterior y con el modelo |
+| 1 | `05-architecture/` | System style and components implied by the model (aggregates, ports, where each rule lives) |
+| 2 | `04-requirements/` | User stories and non-functional requirements necessitated by the model |
+| 3 | `03-product/` | Problem solved and product vision |
+| 4 | `02-domain/` | Domain entities, rules, and events, along with its glossary |
+| 5 | `01-context/` | General description and scope (what is built and what is not) |
+| 6 | `05-architecture/` (closing) | Return to architecture and verify that it aligns with everything above and with the model |
 
-La carpeta `06-data/` **no se escribe**: es el modelo que se les entrega.
+The `06-data/` directory **is not written**: it is the provided model.
 
-## Reglas
+## Rules
 
-1. Hagan **fork** de este repositorio a su cuenta o a la de su equipo.
-2. Trabajen en su fork. Una carpeta por documento, con los nombres de la tabla de arriba.
-3. Cada afirmación debe poder rastrearse al modelo de datos (cite la sección, por ejemplo «§2.3» o «FK-2»).
-   Si algo no sale del modelo, márquenlo como **supuesto**.
-4. Lo que cuenta es el **último commit anterior a las 10:50 p. m.** Lo que llegue después no se revisa.
-5. Se evalúa el desempeño con SDD: cómo se lee, se interpreta y se aplica la especificación. No el volumen de texto.
+1. Create a **fork** of this repository to your personal or team account.
+2. Work in your fork. One folder per document, using the names from the table above.
+3. Every assertion must be traceable to the data model (cite the section, e.g., "§2.3" or "FK-2").
+   If something does not originate from the model, mark it as an **assumption**.
+4. What counts is the **last commit prior to 10:50 PM**. Anything pushed afterward will not be reviewed.
+5. Performance is evaluated on SDD usage: how the specification is read, interpreted, and applied. Not the volume of text.
 
-## En qué semana va cada equipo
+## Team Progress Status
 
-Se calculó comparando cada repositorio `-docs` con la plantilla de gobernanza. Las semanas son las de
-`00-sdd-guide.md`: semana 1 contexto y dominio (01-02), semana 2 producto y requisitos (03-04),
-semanas 2-3 arquitectura y datos (05-06), semanas 3-4 diseño detallado (07 en adelante).
+Calculated by comparing each `-docs` repository against the governance template. Weeks correspond to `00-sdd-guide.md`: week 1 context and domain (01-02), week 2 product and requirements (03-04), weeks 2-3 architecture and data (05-06), weeks 3-4 detailed design (07 onwards).
 
-| Equipo (proyecto) | Semana en la que va | Lo que ya tiene |
+| Team (project) | Current Week | Current Status |
 |---|---|---|
-| lexia | 3-4 | 01 a 06 y 07-api |
-| fixgo | 2-3 | 01 a 06 |
-| smart-technical-service-to-professional | 2-3 | 01 a 06 |
-| belleza-ya | 2-3 | 01 a 06 |
-| distrilink | 2 | 01 a 04; falta 05 |
-| interemprendedores | 2 | 01 a 04; falta 05 |
-| construction-project-management-system | 1 | solo 01-context |
-| residential-complex | sin empezar | sin cambios sobre la plantilla |
-| huila-travel-expedition | sin empezar | sin cambios sobre la plantilla |
-| huila-travel-services | sin empezar | sin cambios sobre la plantilla |
-| fastbill-manager | sin empezar | sin cambios sobre la plantilla |
+| lexia | 3-4 | 01 to 06 and 07-api |
+| fixgo | 2-3 | 01 to 06 |
+| smart-technical-service-to-professional | 2-3 | 01 to 06 |
+| belleza-ya | 2-3 | 01 to 06 |
+| distrilink | 2 | 01 to 04; missing 05 |
+| interemprendedores | 2 | 01 to 04; missing 05 |
+| construction-project-management-system | 1 | 01-context only |
+| residential-complex | not started | no changes over template |
+| huila-travel-expedition | not started | no changes over template |
+| huila-travel-services | not started | no changes over template |
+| fastbill-manager | not started | no changes over template |
 
-Es una estimación por archivos modificados en `main`. Si su equipo trabajó en otra rama, avísenlo.
+This is an estimate based on modified files in `main`. If your team worked on a different branch, please report it.
 
-## Nota sobre el modelo de datos
+## Note on the Data Model
 
-`spec/data-model.md` enlaza a otros documentos del spec original (`constitution.md`, `plan.md`, `adr/`, etc.).
-**No se entregan**: esos enlaces no abren. Todo lo que necesitan está en el modelo.
+`spec/data-model.md` links to other documents from the original spec (`constitution.md`, `plan.md`, `adr/`, etc.).
+**They are not provided**: those links will not open. Everything you need is contained within the model.
