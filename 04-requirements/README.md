@@ -13,6 +13,7 @@
 - **I want to** record sales transactions that capture snapshot copies of product names, unit prices, and category names.
 - **So that** historical financial reports remain unaltered when product details or categories change in the catalog.
 - **Traceability:** `06-data/data-model.md §1` (Frozen values), `§2.3` (`Sale`), `§2.4` (`SaleItem`), ADR-004.
+- **Implementation status:** product name and unit price freezing are **engine**-backed today; category name freezing is designed but **pending (T-11)** — `sale_item.category_name` is not yet a column (`06-data/data-model.md §3`, `§10.1`).
 
 ### US-03: Operator Authentication & Attribution
 - **As an** internal system operator.
@@ -22,9 +23,9 @@
 
 ### US-04: Aggregate Sales Reporting
 - **As an** administrator.
-- **I want to** generate aggregate sales reports filtered by date ranges grouping by product and frozen category label.
+- **I want to** generate aggregate sales reports filtered by date ranges grouping by product and, once T-11 lands, frozen category label.
 - **So that** I can analyze commercial performance over closed periods without modifying past report reads.
-- **Traceability:** `06-data/data-model.md §1` (Sales report), `§11.1` (H-1 report grouping decision).
+- **Traceability:** `06-data/data-model.md §1` (Sales report), `§11.1` (H-1 report grouping decision). Category grouping depends on `sale_item.category_name`, **pending (T-11)** (`06-data/data-model.md §3`).
 
 ---
 

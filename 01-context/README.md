@@ -11,7 +11,7 @@
 - **Catalog Management:** Product registration and retrieval constrained strictly to name, price, stock, category, and an optional image key (`06-data/data-model.md §1` DP-03).
 - **Fixed Category Seeding:** Mandatory product assignment to one of 5 read-only, pre-seeded categories (`06-data/data-model.md §2.1`, `§9.1`).
 - **Inventory & Stock Control:** Strict stock level enforcement preventing negative balances both in application logic and database engine constraints (`06-data/data-model.md §2.2`, `ck_product_stock_non_negative`).
-- **Sales Processing & Immutability:** Recording of itemized sales with point-in-time snapshot freezing for unit prices, product names, and category names (`06-data/data-model.md §1`, `§2.3`, `§2.4`).
+- **Sales Processing & Immutability:** Recording of itemized sales with point-in-time snapshot freezing for unit prices and product names (`06-data/data-model.md §1`, `§2.3`, `§2.4`). Category name freezing is designed but **pending (T-11)**: the `sale_item.category_name` column does not exist in the engine yet (`06-data/data-model.md §3`, `§10.1`).
 - **Security & Identity:** Internal operator authentication utilizing irreversible password hashing and closed-set role attribution (`admin`, `seller`) (`06-data/data-model.md §1`, `§2.5`).
 - **Sales Reporting:** On-the-fly aggregate sales report generation calculated directly within the database engine over date ranges without persisting redundant tables (`06-data/data-model.md §1`, D-06).
 

@@ -15,7 +15,7 @@ In retail and inventory operations, organizations frequently face financial disc
 ---
 
 ## Core Product Principles
-- **Point-in-Time Immutability:** Sales record immutable snapshot copies of unit prices, product names, and category names at the instant of transaction (`06-data/data-model.md §1`, ADR-004).
+- **Point-in-Time Immutability:** Sales record immutable snapshot copies of unit prices and product names at the instant of transaction (`06-data/data-model.md §1`, ADR-004). Category name freezing is part of the same design but is **pending (T-11)** in the engine today (`06-data/data-model.md §3`).
 - **Engine-Level Integrity:** Critical business constraints (such as `stock >= 0`) are enforced directly by the database engine, ensuring data safety against out-of-band writes (`06-data/data-model.md §2.2`, `ck_product_stock_non_negative`).
 - **Zero-Redundancy Architecture:** Eliminates unrequested audit columns, unnecessary intermediary join tables, and pre-calculated report persistence (`06-data/data-model.md §1`, `§8`).
 
