@@ -7,7 +7,7 @@
 - **Stock:** Available physical units of a product. Non-negative (`06-data/data-model.md §1`, `ck_product_stock_non_negative`).
 - **Product Image:** Opaque binary storage key in external storage. Never a file path or raw binary (`06-data/data-model.md §1`, D-08).
 - **Sale:** Consumated and immutable commercial transaction recording timestamp, operator, and sold items (`06-data/data-model.md §1`, `§2.3`).
-- **Sale Line (`SaleItem`):** Itemized record within a sale containing quantity, frozen price, frozen name, and frozen category name (`06-data/data-model.md §1`, `§2.4`).
+- **Sale Line (`SaleItem`):** Itemized record within a sale containing quantity, frozen price, and frozen name (`06-data/data-model.md §1`, `§2.4`); frozen category name is designed but **pending (T-11)** (`06-data/data-model.md §3`).
 - **Quantity:** Units sold within a sale line. Strictly positive (`06-data/data-model.md §1`, `§2.4`).
 - **User:** Internal operator who authenticates and registers sales (`06-data/data-model.md §1`, `§2.5`).
 - **Role:** Operator attribution restricted to a closed set: `admin` or `seller` (`06-data/data-model.md §1`, `§2.5`).
@@ -36,7 +36,7 @@
 - **Invariants:**
   - Belongs strictly to its parent sale (`FK_sale_item_sale_sale_id` with `ON DELETE CASCADE`) (`06-data/data-model.md §2.4`, `FK-2`).
   - `quantity > 0` enforced by domain constructor (`06-data/data-model.md §2.4`).
-  - Product name, unit price, and category name are frozen copies captured at the instant of sale (`06-data/data-model.md §1`, `§2.4`, ADR-004).
+  - Product name and unit price are frozen copies captured at the instant of sale (`06-data/data-model.md §1`, `§2.4`, ADR-004). Category name freezing is designed the same way but is **pending (T-11)**: the column does not exist in the engine yet (`06-data/data-model.md §3`, `§10.1`).
 
 ---
 
